@@ -13,6 +13,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from maxrescue.core.governor import Governor, candidates_from
 from maxrescue.xray.ole import MaxFileError
 from maxrescue.xray.report import Verdict, xray
 
@@ -42,6 +43,35 @@ def _cmd_xray(args: argparse.Namespace) -> int:
     return EXIT_MALWARE if report.verdict == Verdict.MALWARE else EXIT_OK
 
 
+def _cmd_plan(args: argparse.Namespace) -> int:
+    """Show the merge batches a rescue would use. Reads only; runs no Max."""
+    try:
+        report = xray(str(args.file))
+    except MaxFileError as exc:
+        print(f"maxrescue: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    candidates = candidates_from(report.nodes.nodes)
+    governor = Governor(ram_budget=int(args.ceiling_gb * (1 << 30)))
+    batches = governor.plan_all(candidates)
+
+    unnamed = report.nodes.total_nodes - len(candidates)
+    print(f"MaxRescue plan — {args.file}")
+    print(governor.describe_plan(batches))
+    if unnamed:
+        print(
+            f"  {unnamed:,} node(s) have no resolvable name and cannot be merged "
+            "individually — they are NOT covered by this plan."
+        )
+    print()
+    for i, batch in enumerate(batches, 1):
+        flag = "  ⚠ OVER BUDGET" if batch.isolated else ""
+        print(f"  batch {i:>3}  {len(batch.names):>6,} objects{flag}")
+        if batch.note:
+            print(f"           {batch.note}")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="maxrescue",
@@ -63,6 +93,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="write the machine-readable report here ('-' for stdout)",
     )
     x.set_defaults(func=_cmd_xray)
+
+    p = sub.add_parser(
+        "plan",
+        help="show the merge batches a rescue would use (reads only, no Max)",
+    )
+    p.add_argument("file", type=Path, help="path to a .max file")
+    p.add_argument(
+        "--ceiling-gb",
+        type=float,
+        default=70.0,
+        help="resident-memory ceiling to plan against (default: 70)",
+    )
+    p.set_defaults(func=_cmd_plan)
 
     return parser
 

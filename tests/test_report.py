@@ -17,6 +17,7 @@ from tests.helpers import class_entry, container, dll_entry, leaf
 from tests.helpers_ole import build_ole, pad_chunks
 
 GEOMOBJECT = 0x10
+IDX_POLY_FOR_PLAN = 1
 EPOLY = (0x1BF8338D, 0x192F6098)
 
 
@@ -233,3 +234,31 @@ def test_the_monster_note_quantifies_dominance_against_the_median(tmp_path):
     report = xray(str(_write(tmp_path, scene=_objects(500, 500, 50_000))))
     assert report.verdict == Verdict.MONSTER_OBJECT
     assert any("median object" in o for o in report.observations)
+
+
+# --------------------------------------------------------------------------
+# plan subcommand
+# --------------------------------------------------------------------------
+
+
+def test_cli_plan_prints_batches_and_announces_the_unmeasured_prior(tmp_path, capsys):
+    from tests.helpers import node_chunk, refs_map
+
+    scene = container(
+        0x2012,
+        b"".join(
+            node_chunk(0, name=f"Obj_{i}", refs=refs_map({1: 40 + i}))
+            for i in range(40)
+        )
+        + b"".join(leaf(IDX_POLY_FOR_PLAN, b"g" * 5000) for _ in range(40)),
+    )
+    classes = (
+        class_entry(dll_index=-1, class_a=1, class_b=0, super_id=0x01, name="Node")
+        + class_entry(dll_index=0, class_a=EPOLY[0], class_b=EPOLY[1],
+                      super_id=GEOMOBJECT, name="Editable Poly")
+    )
+    path = _write(tmp_path, scene=scene, classes=classes)
+    assert main(["plan", str(path), "--ceiling-gb", "0.001"]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "batch" in out.lower()
+    assert "not measured" in out.lower()

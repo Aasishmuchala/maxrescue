@@ -56,7 +56,7 @@ bit-identical, on a 128 GB / 32 GB-VRAM box. Max 2026 · V-Ray 7 · Vantage 3.3.
 ## P3 — Batch merge + governor *(gated by Checkpoint A)*
 
 - [ ] **T14** `MergeServices` — `getMAXFileObjectNames` + `mergeMaxFile` with **explicit** dup/mtl/reparent flags (never the prompting defaults)
-- [ ] **T15** Governor (pure) — batch sizing from histogram + live RSS feedback; parents kept with children; total coverage asserted
+- [x] **T15** Governor (pure) — 27 tests; self-calibrating disk→RAM multiplier learned from RSS deltas, families kept intact (union-find, cycle-safe), oversized families isolated + flagged, coverage/termination/determinism invariants pinned. `maxrescue plan` wired up
 - [ ] **T16** Batch loop + `BatchReport` + per-batch backup/guard + quarantine-not-halt + journal
 - [ ] **T17** On-box spine run — merge the whole scene batch-by-batch, **no ops**, save; counts preserved
 
