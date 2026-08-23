@@ -17,10 +17,10 @@ bit-identical, on a 128 GB / 32 GB-VRAM box. Max 2026 · V-Ray 7 · Vantage 3.3.
 
 ## P0 — Spikes (on-box, gates everything) ⚠️ do these first
 
-- [ ] **T1** Spike harness — `run_max_tests.ps1` → 3dsmaxbatch → `.ms` → `spikes.py`, result-file contract, kill-on-timeout, zombie cleanup
-- [ ] **T2** ⚠️ **S1 merge-peak** — does selective `mergeMaxFile` deserialise the whole file? Verdict: `MERGE_SELECTIVE` or `MERGE_FULL`
-- [ ] **T3** S2 memory-probe fidelity — psutil in Max 2026 python, `getMAXMemoryInfo`, `nvidia-smi`, three sources within 5 %
-- [ ] **T4** ⚠️ **S3 geometry-vs-texture split** — RSS before/after `freeSceneBitmaps()`+`gc()`; decides whether the opt-in bitmap stage is required
+- [x] **T1** Spike harness STAGED — `run_spikes.ps1` → 3dsmaxbatch → `run_spikes.ms` → `spikes.py`; result-file contract, kill-on-timeout, zombie cleanup, exit codes named. **Unverified until it runs on the box.**
+- [x] **T2** ⚠️ **S1 merge-peak STAGED** — measures baseline → `getMAXFileObjectNames` cost → merge of 1/100/1000 objects, emits `MERGE_SELECTIVE` or `MERGE_FULL`. **Unverified until it runs on the box.**
+- [x] **T3** S2 memory-probe fidelity STAGED — three independent sources cross-checked, raw `getMAXMemoryInfo` array dumped so the index convention is provable
+- [x] **T4** ⚠️ **S3 geometry-vs-texture split STAGED** — gated behind `MAXRESCUE_ALLOW_FULL_OPEN=1` since it loads the whole scene; 256GB box only
 - [ ] **T5** S4 render determinism — two identical renders bit-exact under `idiff`; dump `showproperties (renderers.current)`
 
 ### ✅ Checkpoint A — architecture gate
