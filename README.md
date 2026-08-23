@@ -57,6 +57,16 @@ file is safe". Autodesk's own Scene Security Tools carry the same limitation.
 
 ---
 
+## Ready for the box
+
+Everything buildable without 3ds Max is done. **[docs/box-session.md](docs/box-session.md)**
+is the runbook: what to run, in what order, and what each answer changes.
+
+```powershell
+$env:MAXRESCUE_ALLOW_FULL_OPEN = "1"
+pwsh scripts\run_spikes.ps1 -Target "D:\jobs\villa\villa.max"
+```
+
 ## Not built yet
 
 `rescue` and `verify` arrive with phases 3–5 of [the plan](tasks/plan.md). They

@@ -1,6 +1,6 @@
 # MaxRescue — live checklist
 
-Plan: **[tasks/plan.md](plan.md)** · Contract: **[CLAUDE.md](../CLAUDE.md)** ·
+Box session: **[../docs/box-session.md](../docs/box-session.md)** · Plan: **[tasks/plan.md](plan.md)** · Contract: **[CLAUDE.md](../CLAUDE.md)** ·
 Traps: **[docs/gotchas.md](../docs/gotchas.md)**
 
 **Target:** one real scene, 170–192 GB open RSS → **≤70 GB**, V-Ray 7 renders
