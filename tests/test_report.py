@@ -262,3 +262,43 @@ def test_cli_plan_prints_batches_and_announces_the_unmeasured_prior(tmp_path, ca
     out = capsys.readouterr().out
     assert "batch" in out.lower()
     assert "not measured" in out.lower()
+
+
+# --------------------------------------------------------------------------
+# rescue / verify subcommands
+# --------------------------------------------------------------------------
+
+
+def test_cli_rescue_off_windows_explains_instead_of_pretending(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("os.name", "posix")
+    path = _write(tmp_path, scene=_objects(4200))
+    assert main(["rescue", str(path)]) == 2
+    err = capsys.readouterr().err
+    assert "only runs on Windows" in err
+    assert "run_rescue.ps1" in err
+
+
+def test_cli_verify_reports_a_difference_with_a_nonzero_exit(capsys, monkeypatch):
+    from maxrescue.core.verify import VerifyResult
+
+    monkeypatch.setattr(
+        "maxrescue.app.cli.compare",
+        lambda *a, **k: VerifyResult(
+            identical=False, passed=False, exit_code=2, summary="differences"
+        ),
+    )
+    assert main(["verify", "a.exr", "b.exr"]) == 4
+    assert "do not ship" in capsys.readouterr().out
+
+
+def test_cli_verify_passes_identical_renders(capsys, monkeypatch):
+    from maxrescue.core.verify import VerifyResult
+
+    monkeypatch.setattr(
+        "maxrescue.app.cli.compare",
+        lambda *a, **k: VerifyResult(
+            identical=True, passed=True, exit_code=0, summary="identical"
+        ),
+    )
+    assert main(["verify", "a.exr", "b.exr"]) == 0
+    assert "bit-identical" in capsys.readouterr().out

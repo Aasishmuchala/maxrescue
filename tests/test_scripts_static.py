@@ -42,11 +42,38 @@ def test_script_compiles(path: pathlib.Path):
     compile(source, str(path), "exec")
 
 
+def _module_defines(module_name: str) -> set[str]:
+    """Top-level names a first-party module defines.
+
+    Pure modules are imported. `maxbridge` modules cannot be — they import
+    pymxs — so those are parsed instead. Skipping them entirely would drop
+    exactly the imports most likely to rot, since the bridge is the code that
+    never runs here.
+    """
+    if "maxbridge" in module_name:
+        path = ROOT / pathlib.Path(*module_name.split(".")).with_suffix(".py")
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        names: set[str] = set()
+        for node in tree.body:
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.Assign):
+                names.update(
+                    t.id for t in node.targets if isinstance(t, ast.Name)
+                )
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                names.update(a.asname or a.name.split(".")[0] for a in node.names)
+        return names
+    return set(dir(importlib.import_module(module_name)))
+
+
 @pytest.mark.parametrize("path", _script_files(), ids=lambda p: p.name)
 def test_first_party_imports_resolve(path: pathlib.Path):
     """`from maxrescue.x import Y` must name a Y that exists.
 
-    This is the check that would have caught the renamed-symbol failure.
+    This is the check that would have caught the renamed-symbol failure: a
+    sibling project shipped an on-box script importing a renamed symbol, the
+    ImportError was swallowed, and the box printed a misleading message.
     """
     missing: list[str] = []
     for node in ast.walk(_tree(path)):
@@ -54,9 +81,9 @@ def test_first_party_imports_resolve(path: pathlib.Path):
             continue
         if not node.module.startswith("maxrescue"):
             continue
-        module = importlib.import_module(node.module)
+        defined = _module_defines(node.module)
         for alias in node.names:
-            if alias.name != "*" and not hasattr(module, alias.name):
+            if alias.name != "*" and alias.name not in defined:
                 missing.append(f"{node.module}.{alias.name}")
     assert not missing, f"{path.name} imports names that do not exist: {missing}"
 
