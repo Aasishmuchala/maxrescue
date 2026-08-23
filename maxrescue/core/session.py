@@ -66,6 +66,7 @@ class RescueSession:
     on disk is itself the backup. Never False for a scene the user opened."""
 
     proxy_dir: str = ""
+    texture_dir: str = "textures_reduced"
 
     gate: object = None
     """A callable returning a `VerifyResult`, used to check the one stage that
@@ -98,10 +99,13 @@ class RescueSession:
 
         yield ProgressEvent("plan", "reading the scene", 0.02)
         nodes = list(ctx.query.nodes())
+        textures = list(ctx.query.textures())
         engine = ctx.query.engine()
         render_hidden = ctx.query.render_hidden()
 
-        plan: Plan = build_plan(nodes, self.config, engine, render_hidden)
+        plan: Plan = build_plan(
+            nodes, self.config, engine, render_hidden, textures=textures
+        )
         log.append(f"planned {len(plan.ops)} operation(s) over {len(nodes):,} node(s)")
         for line in plan.skipped:
             log.append(f"  skipped: {line}")
@@ -342,6 +346,10 @@ class RescueSession:
                 ]
                 return any(acted)
 
+        elif op.stage is Stage.TEXTURES:
+            for handle in op.targets:
+                fixes.downscale_texture(handle, op.payload["floor"], self.texture_dir)
+
         elif op.stage is Stage.BITMAP:
             fixes.convert_bitmaps_to_vray()
             # The gate runs INSIDE the undo transaction, so a failing diff
@@ -364,6 +372,15 @@ class RescueSession:
             # The original must be gone. If it survived, the export produced a
             # duplicate rather than a replacement.
             return all(not query.node_exists(h) for h in op.targets)
+        if op.stage is Stage.TEXTURES:
+            floor = op.payload.get("floor", 0)
+            for handle in op.targets:
+                facts = query.texture_facts(handle)
+                # Unknown is not success: a texture whose size cannot be read
+                # has not been shown to be reduced, and it must still exist.
+                if facts is None or not facts.exists or facts.longest_edge > floor:
+                    return False
+            return True
         if op.stage is Stage.COLLAPSE:
             for handle in op.targets:
                 remaining = query.modifier_count(handle)

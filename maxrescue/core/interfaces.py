@@ -19,6 +19,7 @@ from maxrescue.core.types import (
     MemorySample,
     NodeFacts,
     SceneStats,
+    TextureFacts,
 )
 
 __all__ = [
@@ -92,6 +93,22 @@ class SceneQuery(Protocol):
         """
         return ()
 
+    def textures(self) -> Sequence[TextureFacts]:
+        """Every bitmap the scene loads, with its real pixel dimensions.
+
+        Dimensions come from the file on disk, not from the loader — a loader
+        reports what it was told, and the file is what costs memory.
+        """
+        return ()
+
+    def texture_facts(self, handle: int) -> TextureFacts | None:
+        """One texture, looked up directly.
+
+        Targeted for the same reason as `modifier_count`: verifying by re-reading
+        `textures()` would cost a full bitmap sweep per operation.
+        """
+        return None
+
     def node_exists(self, handle: int) -> bool:
         return False
 
@@ -161,6 +178,15 @@ class FixServices(Protocol):
     def delete_node(self, handle: int) -> None: ...
 
     # -- stacks
+    def downscale_texture(self, handle: int, floor_px: int, out_dir: str) -> str:
+        """Write a reduced copy and relink the loader to it.
+
+        Returns the new path. The original is NEVER modified or deleted — the
+        reduced copy goes to a separate folder, so the full-resolution art is
+        always one relink away.
+        """
+        return ""
+
     def collapse_stack(self, handle: int) -> None:
         """Collapse to the top of the stack, preserving instancing.
 

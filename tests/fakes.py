@@ -27,6 +27,7 @@ from maxrescue.core.types import (
     MemorySample,
     NodeFacts,
     SceneStats,
+    TextureFacts,
 )
 
 PROXY_PREVIEW_FACES = 200
@@ -43,6 +44,7 @@ class FakeScene:
     nodes: dict[int, NodeFacts] = field(default_factory=dict)
     materials: dict[int, str] = field(default_factory=dict)
     assignments: dict[int, int | None] = field(default_factory=dict)
+    textures: dict[int, TextureFacts] = field(default_factory=dict)
     notetracks: dict[int, int] = field(default_factory=dict)
     scene_states: list[str] = field(default_factory=list)
     mixer_clips: int = 0
@@ -53,6 +55,7 @@ class FakeScene:
     path: str = r"C:\jobs\villa\villa.max"
 
     # fault injection
+    fail_texture_for: set[int] = field(default_factory=set)
     fail_proxy_for: set[int] = field(default_factory=set)
     fail_collapse_for: set[int] = field(default_factory=set)
     keep_original_on_proxy: set[int] = field(default_factory=set)
@@ -194,6 +197,12 @@ class FakeSceneQuery:
     def nodes(self):
         return tuple(self.scene.nodes.values())
 
+    def textures(self):
+        return tuple(self.scene.textures.values())
+
+    def texture_facts(self, handle: int):
+        return self.scene.textures.get(handle)
+
     def node_exists(self, handle: int) -> bool:
         return handle in self.scene.nodes
 
@@ -225,6 +234,7 @@ class FakeFixServices:
         self.nitrous_limit: int | None = None
         self.notes: list[str] = []
         self.scatter_display: dict[int, str] = {}
+        self.reduced_textures: list[tuple[int, str]] = []
 
     # -- hygiene
     def free_scene_bitmaps(self) -> None:
@@ -273,6 +283,25 @@ class FakeFixServices:
             self.scene.rss_mb -= node.faces * PROXY_RSS_SAVING_PER_FACE * 2
 
     # -- stacks
+    def downscale_texture(self, handle: int, floor_px: int, out_dir: str) -> str:
+        if handle in self.scene.fail_texture_for:
+            raise RuntimeError(f"texture {handle} could not be written")
+        texture = self.scene.textures[handle]
+        if texture.longest_edge <= floor_px:
+            raise RuntimeError("already at or under the floor")
+        ratio = floor_px / float(texture.longest_edge)
+        destination = f"{out_dir}/{texture.handle}_{floor_px}.png"
+        # The original is never removed — only the link moves.
+        self.scene.textures[handle] = replace(
+            texture,
+            path=destination,
+            width=max(1, int(texture.width * ratio)),
+            height=max(1, int(texture.height * ratio)),
+        )
+        self.scene.rss_mb -= (texture.longest_edge ** 2) * 4 / (1024 * 1024) * 0.75
+        self.reduced_textures.append((handle, destination))
+        return destination
+
     def collapse_stack(self, handle: int) -> None:
         if handle in self.scene.fail_collapse_for:
             raise RuntimeError(f"collapse failed for {handle}")

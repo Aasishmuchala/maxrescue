@@ -15,11 +15,27 @@ were paid for in production incidents. Each one has its incident noted.
 
 from __future__ import annotations
 
+import ntpath
 from dataclasses import dataclass
 
-from maxrescue.core.types import Engine, NodeFacts, Op, Plan, Stage
+from maxrescue.core.types import Engine, NodeFacts, Op, Plan, Stage, TextureFacts
 
-__all__ = ["PlanConfig", "build_plan", "collapse_reason", "hidden_reason", "proxy_reason"]
+__all__ = [
+    "PlanConfig",
+    "build_plan",
+    "collapse_reason",
+    "hidden_reason",
+    "proxy_reason",
+    "texture_reason",
+]
+
+#: The smallest a texture may ever be reduced to.
+#:
+#: 4K is the agreed limit of what may be lost, so this is a floor the
+#: configuration cannot go under — a settings file asking for 512 would quietly
+#: destroy far more quality than was authorised, and nobody would see it happen.
+#: An 8K map becomes 4K; a 4K map is left exactly as it is.
+TEXTURE_FLOOR_FLOOR = 4096
 
 
 @dataclass(frozen=True)
@@ -37,6 +53,15 @@ class PlanConfig:
     """Opt-in. Bitmap→VRayBitmap is NOT render-identical by design."""
 
     nitrous_texture_limit: int = 512
+
+    reduce_textures: bool = True
+    texture_floor_px: int = TEXTURE_FLOOR_FLOOR
+    """Longest edge a texture is reduced TO. Never honoured below
+    :data:`TEXTURE_FLOOR_FLOOR`."""
+
+    @property
+    def effective_texture_floor(self) -> int:
+        return max(TEXTURE_FLOOR_FLOOR, int(self.texture_floor_px))
 
 
 # Classes that are already proxies — converting one again is a no-op that costs
@@ -190,6 +215,28 @@ def proxy_reason(node: NodeFacts, config: PlanConfig) -> str | None:
         )
     if node.faces < config.per_node_face_threshold:
         return f"only {node.faces:,} faces — below the {config.per_node_face_threshold:,} threshold"
+    return None
+
+
+def texture_reason(texture: TextureFacts, config: PlanConfig) -> str | None:
+    """Why this texture must not be reduced, or None if it may be.
+
+    The one stage that can change the render, so its refusals matter as much as
+    its actions.
+    """
+    if not config.reduce_textures:
+        return "texture reduction disabled"
+    if not texture.path:
+        return "no file path on this loader"
+    if not texture.exists:
+        # Relinking a texture that is not on disk would replace a broken
+        # reference with a differently broken one, and lose the original path.
+        return f"not on disk: {texture.path}"
+    if texture.in_xref:
+        return "inside an XRef — never touched"
+    floor = config.effective_texture_floor
+    if texture.longest_edge <= floor:
+        return f"already {texture.longest_edge:,}px — at or under the {floor:,}px floor"
     return None
 
 
@@ -421,6 +468,48 @@ def plan_viewport(nodes: list[NodeFacts], config: PlanConfig) -> tuple[list[Op],
     return ops, []
 
 
+def plan_textures(
+    textures: list[TextureFacts], config: PlanConfig
+) -> tuple[list[Op], list[str]]:
+    """One op per oversized texture.
+
+    Per texture rather than one bulk op, so a single unreadable file costs its
+    own reduction and not the other four hundred.
+    """
+    ops: list[Op] = []
+    skipped: list[str] = []
+    floor = config.effective_texture_floor
+
+    for texture in textures:
+        reason = texture_reason(texture, config)
+        if reason:
+            skipped.append(
+                f"{texture.path or f'<loader {texture.handle}>'} "
+                f"({texture.longest_edge:,}px) — {reason}"
+            )
+            continue
+        ops.append(
+            Op(
+                id=f"texture.{texture.handle}",
+                stage=Stage.TEXTURES,
+                title=(
+                    f"{texture.longest_edge:,}px → {floor:,}px: "
+                    f"{ntpath.basename(texture.path)}"
+                ),
+                targets=(texture.handle,),
+                payload={"floor": floor, "path": texture.path, "loader": texture.loader},
+                predicted_note=(
+                    "This is the one reduction that changes the render. The "
+                    "original file is never modified or deleted."
+                ),
+            )
+        )
+
+    # Biggest first: a halt partway leaves the largest saving already banked.
+    ops.sort(key=lambda op: -op.payload.get("floor", 0))
+    return ops, skipped
+
+
 def plan_bitmaps(config: PlanConfig) -> tuple[list[Op], list[str]]:
     if not config.convert_bitmaps:
         return [], [
@@ -446,6 +535,7 @@ def build_plan(
     config: PlanConfig,
     engine: Engine = Engine.VRAY,
     render_hidden: bool = False,
+    textures: list[TextureFacts] | None = None,
 ) -> Plan:
     """Assemble every stage in fixed order."""
     ops: list[Op] = []
@@ -457,6 +547,7 @@ def build_plan(
         lambda: plan_collapse(nodes, config),
         lambda: plan_proxies(nodes, config, engine),
         lambda: plan_viewport(nodes, config),
+        lambda: plan_textures(list(textures or []), config),
         lambda: plan_bitmaps(config),
     ):
         stage_ops, stage_skipped = planner()

@@ -11,7 +11,13 @@ import os
 
 import pymxs
 
-from maxrescue.core.types import Engine, MemorySample, NodeFacts, SceneStats
+from maxrescue.core.types import (
+    Engine,
+    MemorySample,
+    NodeFacts,
+    SceneStats,
+    TextureFacts,
+)
 from maxrescue.maxbridge.maxscript import compile_helpers
 
 rt = pymxs.runtime
@@ -112,6 +118,105 @@ class MaxSceneQuery:
                 )
             )
         return tuple(out)
+
+    def textures(self) -> tuple[TextureFacts, ...]:
+        """Every bitmap loader, with the dimensions of the file on disk.
+
+        Dimensions come from the FILE, not the loader: a loader reports what it
+        was told, and the file is what occupies memory.
+
+        `getBitmapInfo` is tried first because it reads only the header. If this
+        build does not expose it the bitmap is opened and closed, which is
+        slower but correct. If neither works the size is left at zero, and the
+        planner refuses to touch a texture whose size it does not know — a
+        visible no-op beats a guessed resize.
+        """
+        out: list[TextureFacts] = []
+        seen: set[int] = set()
+
+        for class_name, prop in _BITMAP_CLASSES:
+            cls = getattr(rt, class_name, None)
+            if cls is None:
+                continue
+            try:
+                instances = rt.getClassInstances(cls)
+            except Exception:
+                continue
+            for instance in instances or []:
+                try:
+                    handle = int(rt.getHandleByAnim(instance))
+                except Exception:
+                    continue
+                # VRayHDRI and VRayBitmap alias the same objects.
+                if handle in seen:
+                    continue
+                seen.add(handle)
+
+                path = _text(getattr(instance, prop, ""))
+                exists = bool(path) and os.path.isfile(path)
+                width, height = self._bitmap_size(path) if exists else (0, 0)
+                try:
+                    size = os.path.getsize(path) if exists else 0
+                except OSError:
+                    size = 0
+
+                out.append(
+                    TextureFacts(
+                        handle=handle,
+                        path=path,
+                        width=width,
+                        height=height,
+                        loader=class_name,
+                        exists=exists,
+                        bytes_on_disk=size,
+                    )
+                )
+        return tuple(out)
+
+    @staticmethod
+    def _bitmap_size(path: str) -> tuple[int, int]:
+        try:
+            info = rt.getBitmapInfo(path)
+            if info is not None:
+                return int(info.width), int(info.height)
+        except Exception:
+            pass
+        bitmap = None
+        try:
+            bitmap = rt.openBitMap(path)
+            return int(bitmap.width), int(bitmap.height)
+        except Exception:
+            return (0, 0)
+        finally:
+            if bitmap is not None:
+                try:
+                    rt.close(bitmap)
+                except Exception:
+                    pass
+
+    def texture_facts(self, handle: int) -> TextureFacts | None:
+        try:
+            loader = rt.getAnimByHandle(handle)
+            if loader is None:
+                return None
+            class_name = str(rt.classOf(loader))
+            prop = {
+                "Bitmaptexture": "filename",
+                "VRayBitmap": "HDRIMapName",
+                "VRayHDRI": "HDRIMapName",
+                "CoronaBitmap": "filename",
+            }.get(class_name)
+            if prop is None:
+                return None
+            path = _text(getattr(loader, prop, ""))
+            exists = bool(path) and os.path.isfile(path)
+            width, height = self._bitmap_size(path) if exists else (0, 0)
+            return TextureFacts(
+                handle=handle, path=path, width=width, height=height,
+                loader=class_name, exists=exists,
+            )
+        except Exception:
+            return None
 
     def node_exists(self, handle: int) -> bool:
         try:

@@ -28,6 +28,7 @@ __all__ = [
     "RunReport",
     "SceneStats",
     "Stage",
+    "TextureFacts",
 ]
 
 
@@ -56,7 +57,8 @@ class Stage(Enum):
     COLLAPSE = 3
     PROXY = 4
     VIEWPORT = 5
-    BITMAP = 6
+    TEXTURES = 6
+    BITMAP = 7
 
     @property
     def label(self) -> str:
@@ -66,14 +68,19 @@ class Stage(Enum):
             Stage.COLLAPSE: "collapsing modifier stacks",
             Stage.PROXY: "converting heavy meshes to proxies",
             Stage.VIEWPORT: "lightening viewport-only data",
+            Stage.TEXTURES: "reducing oversized textures",
             Stage.BITMAP: "converting bitmap loaders",
         }[self]
 
     @property
     def render_identical(self) -> bool:
-        """False only for stages that can move a pixel, which are opt-in and
-        gated behind an image diff."""
-        return self is not Stage.BITMAP
+        """False for the two stages that can move a pixel.
+
+        TEXTURES is the reduction the user explicitly authorised — a 4K map at
+        2K is visibly softer close up, so it cannot claim identity. BITMAP
+        changes the filtering kernel by design.
+        """
+        return self not in (Stage.TEXTURES, Stage.BITMAP)
 
 
 class OpStatus(Enum):
@@ -170,6 +177,27 @@ class NodeFacts:
     @property
     def is_instanced(self) -> bool:
         return self.base_handle is not None
+
+
+@dataclass(frozen=True)
+class TextureFacts:
+    """One bitmap the scene loads, as read in bulk from the bridge."""
+
+    handle: int
+    path: str
+    width: int = 0
+    height: int = 0
+    loader: str = ""
+    """`Bitmaptexture`, `VRayBitmap`/`VRayHDRI`, `CoronaBitmap` — they do not
+    share a filename property, and setting the wrong one silently does nothing."""
+
+    exists: bool = True
+    in_xref: bool = False
+    bytes_on_disk: int = 0
+
+    @property
+    def longest_edge(self) -> int:
+        return max(self.width, self.height)
 
 
 @dataclass(frozen=True)

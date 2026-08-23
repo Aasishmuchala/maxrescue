@@ -173,6 +173,95 @@ class MaxFixServices:
     def delete_node(self, handle: int) -> None:
         rt.delete(self._node(handle))
 
+    #: Which property carries the filename. Setting the wrong one silently
+    #: does nothing — VRayBitmap ignores `.filename` entirely.
+    _FILE_PROPERTY = {
+        "Bitmaptexture": "filename",
+        "VRayBitmap": "HDRIMapName",
+        "VRayHDRI": "HDRIMapName",
+        "CoronaBitmap": "filename",
+    }
+
+    def downscale_texture(self, handle: int, floor_px: int, out_dir: str) -> str:
+        """Write a reduced copy and relink the loader to it.
+
+        The original is NEVER modified or deleted. The reduced copy goes to a
+        separate folder, so full-resolution art is always one relink away — this
+        stage is the only one that changes the render, and it must not also be
+        the one that loses the source material.
+
+        Gamma is pinned to 1.0 on both open and save. Letting Max apply its
+        default would re-gamma the image on every pass, so a texture reduced
+        twice would drift in colour.
+        """
+        loader = rt.getAnimByHandle(handle)
+        if loader is None:
+            raise RuntimeError(f"texture loader {handle} no longer exists")
+
+        class_name = str(rt.classOf(loader))
+        prop = self._FILE_PROPERTY.get(class_name)
+        if prop is None:
+            raise RuntimeError(
+                f"{class_name} has no known filename property; refusing to guess"
+            )
+
+        source = str(getattr(loader, prop, "") or "")
+        if not source or not os.path.isfile(source):
+            raise RuntimeError(f"source texture is not on disk: {source!r}")
+
+        target_dir = self._resolve_out_dir(out_dir or "textures_reduced")
+        os.makedirs(target_dir, exist_ok=True)
+        stem, extension = ntpath.splitext(ntpath.basename(source))
+        destination = ntpath.join(target_dir, f"{stem}_{floor_px}{extension}")
+
+        original = None
+        reduced = None
+        try:
+            original = rt.openBitMap(source, gamma=1.0)
+            width, height = int(original.width), int(original.height)
+            longest = max(width, height)
+            if longest <= floor_px:
+                raise RuntimeError(
+                    f"{source} is {longest}px, at or under the {floor_px}px floor"
+                )
+            ratio = floor_px / float(longest)
+            new_width = max(1, int(round(width * ratio)))
+            new_height = max(1, int(round(height * ratio)))
+
+            reduced = rt.bitmap(new_width, new_height, filename=destination, gamma=1.0)
+            rt.copy(original, reduced)
+            rt.save(reduced)
+        finally:
+            for bitmap in (reduced, original):
+                if bitmap is not None:
+                    try:
+                        rt.close(bitmap)
+                    except Exception:
+                        pass
+            try:
+                rt.freeSceneBitmaps()
+            except Exception:
+                pass
+
+        # Nothing is relinked until the replacement verifiably exists. A relink
+        # to a file that was not written turns a memory problem into a missing
+        # texture, which is strictly worse.
+        if not os.path.isfile(destination) or os.path.getsize(destination) <= 0:
+            raise RuntimeError(
+                f"the reduced copy was not written to {destination}; the original "
+                "is untouched and still linked"
+            )
+
+        setattr(loader, prop, destination)
+        # Read back: assignment reporting success is not the same as it having
+        # happened, and VRayBitmap is documented to ignore the wrong property.
+        if str(getattr(loader, prop, "")) != destination:
+            raise RuntimeError(
+                f"relink of {class_name} did not take — the loader still points "
+                f"at {source}"
+            )
+        return destination
+
     # -- stacks ------------------------------------------------------------
 
     def collapse_stack(self, handle: int) -> None:

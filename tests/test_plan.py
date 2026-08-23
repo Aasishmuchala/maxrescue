@@ -288,9 +288,14 @@ def test_bitmap_conversion_appears_when_asked_for_and_says_it_is_gated():
     assert "diff" in ops[0].predicted_note
 
 
-def test_only_the_bitmap_stage_is_not_render_identical():
-    """A regression guard on the contract itself."""
-    assert [s for s in Stage if not s.render_identical] == [Stage.BITMAP]
+def test_exactly_two_stages_are_not_render_identical():
+    """A regression guard on the contract itself.
+
+    TEXTURES is the reduction that was explicitly authorised — a 4K map is not
+    an 8K map. BITMAP changes the filtering kernel by design. Everything else
+    must stay identical, and a third entry appearing here is a contract change,
+    not a detail."""
+    assert [s for s in Stage if not s.render_identical] == [Stage.TEXTURES, Stage.BITMAP]
 
 
 def test_hygiene_runs_even_for_an_empty_scene():
