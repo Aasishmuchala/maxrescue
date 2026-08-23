@@ -88,6 +88,28 @@ _PROXYABLE_CLASSES = frozenset(
 # image; collapsing at render level explodes memory. Neither is wanted.
 _RENDER_COUPLED = frozenset({"turbosmooth", "meshsmooth", "opensubdiv", "subdivide"})
 
+# Modifiers whose evaluated viewport mesh IS what renders, so baking them into
+# a proxy is faithful. An ALLOWLIST rather than a blocklist: a proxy captures
+# the evaluated mesh, and any modifier not on this list may contribute at render
+# time in a way the bake cannot capture (displacement, hair, render-time
+# subdivision). Refusing an unknown modifier costs some memory; baking one
+# wrongly costs the render.
+_BAKEABLE_MODIFIERS = frozenset(
+    {
+        "bend", "twist", "taper", "stretch", "skew", "noise", "ripple", "wave",
+        "shell", "symmetry", "mirror", "slice", "cap_holes", "caphole",
+        "normalmodifier", "normal", "smooth", "edit_normals", "editnormals",
+        "unwrap_uvw", "unwrapuvw", "uvwmap", "uvw_map", "uvwxform", "uvw_xform",
+        "materialmodifier", "material", "vertexpaint", "vertex_paint",
+        "editable_poly", "edit_poly", "editpoly", "edit_mesh", "editmesh",
+        "meshselect", "mesh_select", "polyselect", "poly_select", "volselect",
+        "vol_select", "facextrude", "face_extrude", "push", "relax", "xform",
+        "affectregion", "affect_region", "deleteMesh", "delete_mesh",
+        "optimize", "prooptimizer", "multires", "tessellate", "quadify_mesh",
+        "quadifymesh", "turn_to_poly", "turntopoly", "turn_to_mesh", "turntomesh",
+    }
+)
+
 # Stack entries that must never be baked away.
 _UNSAFE_TO_COLLAPSE = frozenset(
     {
@@ -149,11 +171,22 @@ def proxy_reason(node: NodeFacts, config: PlanConfig) -> str | None:
         # Chaos: mirrored meshes have local-space normals reversed and need an
         # xform reset before export. Not worth the risk automatically.
         return "mirrored / negative scale — normals do not survive the export"
-    if node.render_coupled_modifiers:
+    if node.render_differs_from_viewport:
         return (
-            "carries "
-            + ", ".join(node.render_coupled_modifiers)
-            + " whose iterations drive the render"
+            "renders differently from the viewport ("
+            + ", ".join(node.render_differs_from_viewport)
+            + ") — a proxy bakes the viewport mesh"
+        )
+    # A proxy captures the EVALUATED mesh. Any modifier that contributes at
+    # render time rather than to that mesh would be silently discarded, so
+    # anything not proven bakeable is refused.
+    unknown = [
+        m for m in node.modifier_classes if _norm(m) not in _BAKEABLE_MODIFIERS
+    ]
+    if unknown:
+        return (
+            "stack contains " + ", ".join(unknown) + " — not on the proven "
+            "bakeable list, and a proxy would capture only the viewport mesh"
         )
     if node.faces < config.per_node_face_threshold:
         return f"only {node.faces:,} faces — below the {config.per_node_face_threshold:,} threshold"

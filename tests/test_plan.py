@@ -51,6 +51,32 @@ def test_a_plain_heavy_mesh_is_convertible():
     assert proxy_reason(node(), CONFIG) is None
 
 
+def test_a_stack_of_proven_bakeable_modifiers_is_convertible():
+    assert proxy_reason(node(modifier_classes=("Bend", "Shell", "Smooth")), CONFIG) is None
+
+
+def test_an_unrecognised_modifier_is_refused_rather_than_assumed_safe():
+    """A proxy captures the evaluated mesh. A modifier that contributes at
+    render time instead — displacement, hair, render-time subdivision — is
+    silently discarded by the bake, so anything unproven is refused."""
+    reason = proxy_reason(node(modifier_classes=("SomeNewVendorModifier",)), CONFIG)
+    assert reason is not None and "bakeable" in reason
+
+
+def test_a_turbosmooth_whose_render_differs_is_refused():
+    """The dangerous case is useRenderIterations ON: viewport shows 1
+    iteration, the render uses 3, and a bake captures the viewport mesh. The
+    first version of this test was inverted and passed exactly this node."""
+    reason = proxy_reason(
+        node(
+            modifier_classes=("TurboSmooth",),
+            render_differs_from_viewport=("TurboSmooth",),
+        ),
+        CONFIG,
+    )
+    assert reason is not None
+
+
 @pytest.mark.parametrize(
     "kwargs, expect",
     [
@@ -72,7 +98,10 @@ def test_a_plain_heavy_mesh_is_convertible():
         ({"child_count": 3}, "children"),
         ({"has_parent": True}, "parent"),
         ({"negative_scale": True}, "mirrored"),
-        ({"render_coupled_modifiers": ("TurboSmooth",)}, "drive the render"),
+        ({"render_differs_from_viewport": ("TurboSmooth",)}, "renders differently"),
+        ({"modifier_classes": ("VRayDisplacementMod",)}, "bakeable"),
+        ({"modifier_classes": ("Hair_and_Fur",)}, "bakeable"),
+        ({"modifier_classes": ("SomeVendorPlugin",)}, "bakeable"),
         ({"faces": 100}, "threshold"),
     ],
     ids=lambda v: str(v)[:40],

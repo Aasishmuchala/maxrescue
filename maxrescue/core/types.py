@@ -150,9 +150,14 @@ class NodeFacts:
     scripted_controller: bool = False
     negative_scale: bool = False
 
-    render_coupled_modifiers: tuple[str, ...] = ()
-    """Subdivision modifiers whose viewport iterations also drive the render.
-    Collapsing or lowering these changes the image."""
+    render_differs_from_viewport: tuple[str, ...] = ()
+    """Modifiers whose RENDER output differs from what the viewport shows —
+    a TurboSmooth with `useRenderIterations` on, for instance.
+
+    Baking such a node into a proxy captures the viewport mesh and silently
+    drops the extra subdivision. The first version of this test was inverted:
+    it flagged the safe case (viewport == render) and let the dangerous one
+    through."""
 
     @property
     def is_instanced(self) -> bool:

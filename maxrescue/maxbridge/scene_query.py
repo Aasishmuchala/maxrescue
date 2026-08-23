@@ -106,7 +106,7 @@ class MaxSceneQuery:
                     in_xref=_bool(values[20]),
                     scripted_controller=_bool(values[21]),
                     negative_scale=_bool(values[22]),
-                    render_coupled_modifiers=tuple(
+                    render_differs_from_viewport=tuple(
                         _text(m) for m in (values[23] or [])
                     ),
                 )
@@ -141,6 +141,10 @@ class MaxSceneQuery:
 
         `sceneMaterials` still contains a material after it is unassigned, so
         membership is not liveness and a verify built on it halts good runs.
+
+        COST: this walks every object, so it is O(n) per call. Never call it in
+        a loop over materials — that is O(n*m) and will look like a hang.
+        `purge_unused_materials` builds the used-set once instead.
         """
         try:
             for node in rt.objects:
@@ -183,12 +187,20 @@ class MaxSceneQuery:
         return os.path.join(folder, name) if folder and name else ""
 
     def stats(self) -> SceneStats:
-        polygons = vertices = 0
+        """Scene totals in ONE MAXScript crossing.
+
+        The obvious version — iterating `rt.geometry` and calling
+        `getPolygonCount` per node from Python — costs one crossing per object.
+        `stats()` runs twice per session and the session runs once per batch, so
+        on a 50k-object scene across 50 batches that is millions of crossings
+        spent on a number nobody is watching.
+        """
+        self._ensure_compiled()
+        polygons = vertices = nodes = materials = 0
         try:
-            for node in rt.geometry:
-                counts = rt.getPolygonCount(node)
-                polygons += _int(counts[0])
-                vertices += _int(counts[1])
+            totals = [int(v) for v in rt.mrSceneTotals()]
+            if len(totals) >= 5:
+                polygons, vertices, _geometry, nodes, materials = totals[:5]
         except Exception:
             pass
 
@@ -200,8 +212,8 @@ class MaxSceneQuery:
         return SceneStats(
             polygons=polygons,
             vertices=vertices,
-            nodes=_int(getattr(rt.objects, "count", 0)),
-            materials=_int(getattr(rt.sceneMaterials, "count", 0)),
+            nodes=nodes,
+            materials=materials,
             file_mb=self._file_mb(),
             texture_mb=texture_mb,
             missing_assets=missing,

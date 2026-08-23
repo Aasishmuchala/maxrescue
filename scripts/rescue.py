@@ -80,6 +80,26 @@ def main() -> str:
         return "RESCUE_FAIL no MAXRESCUE_TARGET"
     output = OUTPUT or os.path.splitext(TARGET)[0] + "_rescued.max"
 
+    # The whole safety model rests on the source being untouched — that is why
+    # no per-batch backup is taken. If the output resolves to the source, the
+    # first batch save destroys the original and there is no backup at all.
+    # Compare resolved paths AND, where the file exists, the identity the OS
+    # reports, so a UNC / drive-letter / 8.3 alias cannot slip past.
+    if os.path.abspath(os.path.normcase(output)) == os.path.abspath(
+        os.path.normcase(TARGET)
+    ):
+        return "RESCUE_REFUSED output is the source file — that would destroy it"
+    try:
+        if os.path.exists(output) and os.path.samefile(output, TARGET):
+            return "RESCUE_REFUSED output resolves to the source file"
+    except OSError:
+        pass
+    if os.path.exists(output) and not os.environ.get("MAXRESCUE_OVERWRITE"):
+        return (
+            "RESCUE_REFUSED output already exists: %s "
+            "(set MAXRESCUE_OVERWRITE=1 to replace it)" % output
+        )
+
     settings = Settings.load()
     settings.convert_bitmaps = CONVERT_BITMAPS or settings.convert_bitmaps
     settings.ram_budget_gb = CEILING_GB

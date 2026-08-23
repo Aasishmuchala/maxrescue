@@ -29,15 +29,18 @@ PROXY_DISPLAY_BOUNDING_BOX = 0
 #: downscaled image and changes the result.
 BITMAP_MODE_SAFE = "renderMode_UseFullRes_FlushFromMemory"
 
-#: Candidate viewport-display properties, in preference order. Viewport group
-#: only — never the render group, never "Disable Object".
-_SCATTER_DISPLAY_CANDIDATES = (
-    ("dispmode", 3),
-    ("displaymode", 3),
-    ("viewport_display", 3),
-    ("vpdisplay", 1),
-    ("display_mode", 1),
-)
+#: Verified (property name -> value) pairs for scatter viewport display.
+#:
+#: EMPTY, and that is the point. The research is explicit that Forest Pack /
+#: RailClone / tyFlow property names are undocumented — and their VALUES more so.
+#: Those plugins expose a viewport display group AND a render display group, plus
+#: a "Disable Object" that removes the object from the RENDER. Writing a guessed
+#: integer into a guessed property name could therefore delete 40,000 trees from
+#: the render while the report says "switched to a light viewport mode".
+#:
+#: Until the on-box `getPropNames` dump exists, this stage DISCOVERS and REPORTS
+#: and changes nothing. Populate from `settings.json` once a mapping is proven.
+VERIFIED_SCATTER_DISPLAY: dict[str, tuple[str, int]] = {}
 
 
 class MaxFixServices:
@@ -159,8 +162,28 @@ class MaxFixServices:
     # -- proxies -----------------------------------------------------------
 
     def convert_to_proxy(self, handle: int, out_dir: str) -> int:
+        """Export one node to `.vrmesh` and replace it with a VRayProxy.
+
+        `exportMultiple=True` is the documented **per-object** mode: the mesh
+        file carries no transform and the proxy keeps the original's, pivot
+        included. The single-file mode (`False`) bakes world transforms into the
+        mesh and requires the proxy to sit at the origin — with
+        `autoCreateProxies` also applying the original transform, the object
+        ends up displaced by its own position.
+
+        The created proxy is resolved to a real **node**. `getClassInstances`
+        yields base objects, and a base object fails `isValidNode`, so using one
+        as a node handle makes the mandatory bounding-box display silently fail
+        — and the whole memory saving depends on that display mode.
+
+        Once `autoCreateProxies` runs, the original is **already deleted**. Every
+        message past that point says so, because headless undo does not restore
+        and the backup is the only way back.
+        """
         node = self._node(handle)
         name = str(node.name)
+        before = self._bounds(node)
+
         target_dir = self._resolve_out_dir(out_dir)
         os.makedirs(target_dir, exist_ok=True)
         path = self._unique_path(target_dir, name)
@@ -169,31 +192,44 @@ class MaxFixServices:
         created = rt.vrayMeshExport(
             meshFile=path,
             autoCreateProxies=True,
-            exportMultiple=False,
+            exportMultiple=True,
             createMultiMtl=True,
             oneVoxelPerMesh=True,
             maxPreviewFaces=1000,
             exportPointClouds=False,
         )
 
-        # The file must exist before anything destructive is contemplated.
         if not os.path.exists(path):
-            raise RuntimeError(f"vrayMeshExport produced no file for {name}")
+            # Nothing was created, so nothing was replaced — the original stands.
+            raise RuntimeError(
+                f"vrayMeshExport produced no file for {name}; the original is untouched"
+            )
 
-        proxy = None
-        try:
-            for item in created or []:
-                proxy = item
-                break
-        except TypeError:
-            # The documented return array is not iterable on some builds.
-            proxy = self._find_proxy_by_file(path)
-        if proxy is None:
-            proxy = self._find_proxy_by_file(path)
+        proxy = self._resolve_created_node(created, path)
         if proxy is None:
             raise RuntimeError(
-                f"exported {name} but could not identify the created proxy; "
-                "the original has been left untouched"
+                f"exported {name} but could not identify the created proxy node. "
+                "autoCreateProxies has ALREADY replaced the original, so the "
+                "scene has changed — recover from the backup, not from undo."
+            )
+
+        # Bounding box before and after. This is what catches a transform
+        # applied twice, which no handle check would ever notice.
+        after = self._bounds(proxy)
+        if not self._bounds_close(before, after):
+            raise RuntimeError(
+                f"{name}: the proxy sits at {after} but the original occupied "
+                f"{before} — the transform did not survive the export. The "
+                "original is already gone; recover from the backup."
+            )
+
+        # Bounding box display. Anything heavier keeps a preview mesh in RAM,
+        # and a modifier here reverts the proxy to a regular mesh entirely.
+        if not self._set_display(proxy, PROXY_DISPLAY_BOUNDING_BOX):
+            raise RuntimeError(
+                f"{name}: converted, but the proxy display mode could not be set "
+                "to bounding box, so the conversion saves nothing. The original "
+                "is already gone; recover from the backup."
             )
 
         try:
@@ -202,52 +238,97 @@ class MaxFixServices:
             return 0
 
     def set_proxy_display(self, handle: int, mode: int = PROXY_DISPLAY_BOUNDING_BOX) -> None:
-        """Never leave a modifier on a proxy — it reverts to a regular mesh and
-        loses every saving."""
+        """Kept for the port contract. `convert_to_proxy` already sets and
+        verifies the display, because a silent failure there costs the entire
+        saving the conversion existed for."""
         try:
-            node = self._node(handle)
-            node.display = mode
+            self._set_display(self._node(handle), mode)
         except Exception as exc:
             self.notes.append(f"could not set proxy display on {handle}: {exc}")
 
     @staticmethod
-    def _resolve_out_dir(out_dir: str) -> str:
-        """Resolve relative to the SCENE, never the process CWD.
-
-        Max's working directory is Program Files; a relative path resolved there
-        raises PermissionError and halted a run on default settings.
-        """
-        if out_dir and ntpath.isabs(out_dir):
-            return out_dir
-        folder = str(rt.maxFilePath or "") or os.getcwd()
-        return ntpath.join(folder, out_dir or "proxies")
+    def _set_display(node, mode: int) -> bool:
+        try:
+            node.display = mode
+            return int(node.display) == int(mode)
+        except Exception:
+            return False
 
     @staticmethod
-    def _unique_path(folder: str, name: str) -> str:
-        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", name) or "mesh"
-        for index in range(0, 10_000):
-            suffix = "" if index == 0 else f"_{index:03d}"
-            path = ntpath.join(folder, f"{safe}{suffix}.vrmesh")
-            if not os.path.exists(path):
-                return path
-        raise RuntimeError(f"cannot find a free .vrmesh name for {name}")
+    def _bounds(node):
+        """World-space bounding box as two triples, or None if unreadable."""
+        try:
+            low, high = node.min, node.max
+            return (
+                (float(low.x), float(low.y), float(low.z)),
+                (float(high.x), float(high.y), float(high.z)),
+            )
+        except Exception:
+            return None
+
+    @staticmethod
+    def _bounds_close(before, after, rel_tol: float = 0.02, abs_floor: float = 0.1) -> bool:
+        """Whether two bounding boxes describe the same object in the same place.
+
+        Unreadable bounds are treated as a pass: refusing every node whose box
+        cannot be read would disable the largest memory lever over a diagnostic
+        that is not itself load-bearing.
+        """
+        if before is None or after is None:
+            return True
+        for low, high in zip(before, after):
+            for a, b in zip(low, high):
+                if abs(a - b) > max(abs_floor, rel_tol * max(abs(a), abs(b))):
+                    return False
+        return True
+
+    def _resolve_created_node(self, created, path: str):
+        """The created proxy as a NODE, never a base object."""
+        candidates = []
+        try:
+            candidates.extend(list(created or []))
+        except TypeError:
+            # The documented return array is not iterable on some builds.
+            pass
+
+        for candidate in candidates:
+            if self._is_node(candidate):
+                return candidate
+
+        found = self._find_proxy_by_file(path)
+        return found
+
+    @staticmethod
+    def _is_node(candidate) -> bool:
+        try:
+            return candidate is not None and bool(rt.isValidNode(candidate))
+        except Exception:
+            return False
 
     @staticmethod
     def _find_proxy_by_file(path: str):
-        """Recover the created proxy by its file.
+        """Recover the created proxy by its mesh file.
 
-        Only safe because `_unique_path` guarantees the filename is fresh. If
-        more than one node claims it, refuse rather than guess.
+        `getClassInstances` returns base objects, so each match is walked back
+        to its node with `refs.dependentNodes`. Only safe because
+        `_unique_path` guarantees the filename is fresh; more than one match
+        means refuse rather than guess.
         """
         matches = []
         try:
             cls = getattr(rt, "VRayProxy", None)
             if cls is None:
                 return None
-            for node in rt.getClassInstances(cls):
+            for base in rt.getClassInstances(cls):
                 try:
-                    if str(node.fileName).lower() == path.lower():
-                        matches.append(node)
+                    if str(base.fileName).lower() != path.lower():
+                        continue
+                except Exception:
+                    continue
+                try:
+                    for node in rt.refs.dependentNodes(base) or []:
+                        if rt.isValidNode(node):
+                            matches.append(node)
                 except Exception:
                     continue
         except Exception:
@@ -291,30 +372,57 @@ class MaxFixServices:
     def set_scatter_display(self, handle: int, mode: str = "points") -> bool:
         """Switch a scatter object to a cheap viewport representation.
 
-        Property names for Forest Pack / RailClone / tyFlow are undocumented and
-        version-dependent, so they are discovered rather than assumed. A plugin
-        whose property cannot be found is skipped and noted — guessing a
-        property that exists but means something else could change the render.
+        Returns False and records what it saw unless the class has a **verified**
+        (property, value) pair in :data:`VERIFIED_SCATTER_DISPLAY`.
+
+        Forest Pack, RailClone and tyFlow each expose a viewport display group,
+        a render display group, and a "Disable Object" that removes the object
+        from the render. Their property names are undocumented and their enum
+        values more so. Guessing one that happens to exist but means something
+        else would silently change the render — in a stage declared
+        render-identical — which is worse than doing nothing.
+
+        So this reports the property names it found, and the box session turns
+        that into a mapping.
         """
         try:
             node = self._node(handle)
         except Exception:
             return False
 
+        class_name = ""
+        try:
+            class_name = str(rt.classOf(node))
+        except Exception:
+            pass
+
+        verified = VERIFIED_SCATTER_DISPLAY.get(class_name)
         available = self._properties(node)
-        for prop, value in _SCATTER_DISPLAY_CANDIDATES:
-            if prop not in available:
-                continue
-            try:
-                setattr(node, prop, value)
-                return True
-            except Exception as exc:
-                self.notes.append(f"{node.name}: setting {prop} failed ({exc})")
-        self.notes.append(
-            f"{getattr(node, 'name', handle)}: no known viewport-display property "
-            f"(saw: {sorted(available)[:12]}) — left untouched"
-        )
-        return False
+
+        if verified is None:
+            self.notes.append(
+                f"scatter {getattr(node, 'name', handle)} ({class_name or '?'}): "
+                "no VERIFIED viewport-display mapping, so nothing was changed. "
+                f"Properties present: {sorted(available)[:20]}"
+            )
+            return False
+
+        prop, value = verified
+        if prop.lower() not in available:
+            self.notes.append(
+                f"scatter {class_name}: verified property {prop!r} is absent on "
+                f"this build — nothing changed. Properties present: {sorted(available)[:20]}"
+            )
+            return False
+
+        try:
+            setattr(node, prop, value)
+            # Read back: a write that reported success but did not take would
+            # otherwise be reported as an applied optimisation.
+            return int(getattr(node, prop)) == int(value)
+        except Exception as exc:
+            self.notes.append(f"{class_name}: setting {prop} failed ({exc})")
+            return False
 
     @staticmethod
     def _properties(node) -> set[str]:

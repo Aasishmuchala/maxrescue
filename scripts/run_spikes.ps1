@@ -47,11 +47,16 @@ $env:MAXRESCUE_OUT = $outDir
 $batch = "C:\Program Files\Autodesk\3ds Max $MaxVersion\3dsmaxbatch.exe"
 if (-not (Test-Path $batch)) { throw "3dsmaxbatch not found: $batch" }
 
-foreach ($name in @("3dsmax", "3dsmaxbatch")) {
-    Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
-        Write-Host "killing stale $name (pid $($_.Id))"
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-    }
+# Stale BATCH processes only. Never 3dsmax.exe: an artist may have a scene open
+# with hours of unsaved work, and this script has no way to tell a zombie from a
+# colleague. Killing it would be the most expensive thing this tool ever did.
+Get-Process -Name "3dsmaxbatch" -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host "killing stale 3dsmaxbatch (pid $($_.Id))"
+    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+}
+$interactive = @(Get-Process -Name "3dsmax" -ErrorAction SilentlyContinue)
+if ($interactive.Count -gt 0) {
+    Write-Warning "$($interactive.Count) interactive 3ds Max process(es) are running. Not touching them - close them yourself if this run needs the memory."
 }
 
 $script = Join-Path $PSScriptRoot "run_spikes.ms"

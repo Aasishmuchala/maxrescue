@@ -245,3 +245,34 @@ def test_stress_context_manager_closes_even_when_the_body_raises(tmp_path):
     # A second open must succeed — on Windows a leaked handle would lock it.
     with MaxFile.open(str(path)) as mf:
         assert mf.streams
+
+
+def test_stress_opening_a_file_does_not_read_its_large_streams(tmp_path):
+    """`MaxFile.__init__` peeks two bytes per stream to detect gzip framing.
+    Doing that through olefile loads the WHOLE stream — on a 6 GB Scene stream
+    that allocates ~13 GB before a single chunk is parsed, and it happens in the
+    very first call of both `xray` and `rescue`."""
+    from tests.helpers_ole import build_ole
+
+    big = leaf(1, b"g" * 4_000_000)
+    blob = build_ole(
+        {
+            "Scene": scene_stream(big),
+            "ClassDirectory3": pad_chunks(_classes()),
+            "DllDirectory": pad_chunks(dll_entry("d", "EPoly.dlo")),
+        }
+    )
+    path = tmp_path / "big.max"
+    path.write_bytes(blob)
+
+    import tracemalloc
+
+    tracemalloc.start()
+    with MaxFile.open(str(path)) as mf:
+        assert mf.info("Scene").size > 4_000_000
+        _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    assert peak < 1_000_000, (
+        f"opening the file allocated {peak:,} bytes to read 2 bytes per stream"
+    )

@@ -238,11 +238,31 @@ class MaxFile:
         return size < self._ole.minisectorcutoff
 
     def _peek_gzip(self, path, size: int) -> bool:
+        """Read the first two bytes — and only the first two bytes.
+
+        `olefile.openstream()` would load the WHOLE stream to answer this. On a
+        6 GB `Scene` stream that allocates ~13 GB before a single chunk is
+        parsed, which would kill the X-ray on exactly the files it exists for —
+        and this runs in `__init__`, before any lazy reader is reachable.
+        """
         if size < 2:
             return False
         try:
-            with self._ole.openstream(path) as stream:
-                return stream.read(2) == _GZIP_MAGIC
+            if self._is_mini(size):
+                # Under the cutoff the whole stream is a few KB; olefile's
+                # mini-FAT handling is the right tool.
+                with self._ole.openstream(path) as stream:
+                    return stream.read(2) == _GZIP_MAGIC
+            entry = self._ole.direntries[self._ole._find(path)]
+            reader = SectorChainReader(
+                fp=self._fp,
+                fat=self._ole.fat,
+                start_sector=entry.isectStart,
+                size=size,
+                sector_size=self._ole.sectorsize,
+                data_offset=self._ole.sectorsize,
+            )
+            return reader.read(2) == _GZIP_MAGIC
         except Exception:
             return False
 

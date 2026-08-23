@@ -26,7 +26,7 @@ throw away the first 39.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Iterator, Sequence
 
 from maxrescue.core.governor import Batch, Governor, MergeCandidate
@@ -41,7 +41,10 @@ __all__ = ["BatchRunner", "RescueOutcome"]
 class RescueOutcome:
     batches: tuple[BatchReport, ...] = ()
     output_path: str | None = None
+    """None when no usable output was written — never a path that does not exist."""
+
     halted: bool = False
+    save_failed: bool = False
     memory_before: MemorySample | None = None
     memory_after: MemorySample | None = None
     log: tuple[str, ...] = ()
@@ -61,7 +64,12 @@ class RescueOutcome:
     @property
     def complete(self) -> bool:
         """Every object asked for actually arrived, and nothing halted."""
-        return not self.halted and self.merged == self.requested and not self.quarantined
+        return (
+            not self.halted
+            and not self.save_failed
+            and self.merged == self.requested
+            and not self.quarantined
+        )
 
     @property
     def peak_rss_mb(self) -> float:
@@ -96,6 +104,7 @@ class BatchRunner:
         log: list[str] = []
         reports: list[BatchReport] = []
         halted = False
+        save_failed = False
 
         batches = self.governor.plan_all(list(candidates))
         log.append(self.governor.describe_plan(batches))
@@ -138,7 +147,19 @@ class BatchRunner:
             # Save after every batch — a crash at batch 40 of 50 must not throw
             # away the first 39.
             if report.outcome is not BatchOutcome.QUARANTINED:
-                ctx.merge.save_as(self.output_path)
+                if not ctx.merge.save_as(self.output_path):
+                    # Silence here is the worst outcome available: the run
+                    # continues for hours and reports success while naming an
+                    # output file that is stale or absent.
+                    halted = True
+                    save_failed = True
+                    log.append(
+                        f"! batch {index}: saving to {self.output_path} FAILED. "
+                        "Stopping — continuing would spend hours producing "
+                        "nothing. Check free space and permissions."
+                    )
+                    reports[-1] = replace(report, outcome=BatchOutcome.HALTED)
+                    break
 
             if batch_halted:
                 halted = True
@@ -148,21 +169,29 @@ class BatchRunner:
                 )
                 break
 
-        if not halted and not self._cancelled and self.reduce_each_batch:
+        # NOT gated on reduce_each_batch: that flag chooses WHEN reduction
+        # happens, not WHETHER. Gating both on it meant switching it off made the
+        # tool merge the scene, change nothing, and report memory figures as if
+        # it had.
+        if not halted and not self._cancelled:
             yield ProgressEvent("final", "final pass over the whole scene", 0.96)
             final, final_log = self._reduce("final pass")
             log.extend(final_log)
             if final is not None and final.halted:
                 halted = True
 
-        ctx.merge.save_as(self.output_path)
+        if not ctx.merge.save_as(self.output_path):
+            save_failed = True
+            halted = True
+            log.append(f"! final save to {self.output_path} FAILED")
         ctx.memory.settle()
         memory_after = ctx.memory.sample()
 
         outcome = RescueOutcome(
             batches=tuple(reports),
-            output_path=self.output_path,
+            output_path=None if save_failed else self.output_path,
             halted=halted,
+            save_failed=save_failed,
             memory_before=memory_before,
             memory_after=memory_after,
             log=tuple(log + [self._headline(reports, memory_after)]),

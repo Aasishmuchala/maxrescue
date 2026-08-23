@@ -45,19 +45,19 @@ NODE_FACTS_FIELDS = (
     "in_xref",
     "scripted_controller",
     "negative_scale",
-    "render_coupled",
+    "render_differs_from_viewport",
 )
 
 NODE_FACTS_FN = r"""
-fn mrSafeBool expr default:false = (
-    local r = default
-    try (r = expr) catch (r = default)
-    r
-)
-
 fn mrNodeFacts = (
     local rows = #()
-    for n in objects do (
+    for n in objects do
+    (
+    -- The whole per-node body is guarded: one malformed plugin node must cost
+    -- its own row, not the entire scan. Losing the scan means the run dies at
+    -- "reading the scene" after a 45-second Max launch, with no diagnosis.
+    try
+    (
         local handle = 0
         try (handle = getHandleByAnim n) catch ()
 
@@ -86,16 +86,21 @@ fn mrNodeFacts = (
         ) catch ()
 
         local mods = #()
-        local coupled = #()
+        local differs = #()
         try (
             for m in n.modifiers do (
                 local mc = (classOf m) as string
                 append mods mc
-                -- A subdivision modifier whose viewport iterations also drive
-                -- the render: touching it changes the image.
+                -- The dangerous case is useRenderIterations = TRUE: the
+                -- viewport shows `iterations` while the render uses
+                -- `renderIterations`, so a proxy baked from the viewport mesh
+                -- silently loses subdivision levels.
+                -- With it FALSE the two are the same and baking is faithful.
+                -- This condition was inverted at first: it flagged the safe
+                -- case and passed the dangerous one straight through.
                 try (
-                    if (isProperty m #useRenderIterations) and (not m.useRenderIterations) do
-                        append coupled mc
+                    if (isProperty m #useRenderIterations) and m.useRenderIterations do
+                        append differs mc
                 ) catch ()
             )
         ) catch ()
@@ -106,7 +111,8 @@ fn mrNodeFacts = (
         local kids = 0
         try (kids = n.children.count) catch ()
 
-        local hasParent = mrSafeBool (n.parent != undefined)
+        local hasParent = false
+        try (hasParent = (n.parent != undefined)) catch ()
 
         -- Childless helpers are often LookAt / constraint targets; deleting one
         -- silently breaks whatever pointed at it.
@@ -116,14 +122,22 @@ fn mrNodeFacts = (
             deps = (d != undefined and d.count > 0)
         ) catch ()
 
-        local inGrp = mrSafeBool (isGroupMember n)
-        local grpHead = mrSafeBool (isGroupHead n)
-        local hidden = mrSafeBool (n.isHidden)
-        local rend = mrSafeBool (n.renderable) default:true
-        local primVis = mrSafeBool (n.primaryVisibility) default:true
-        local anim = mrSafeBool (n.isAnimated)
-        local bone = mrSafeBool (isKindOf n BoneGeometry)
-        local xref = mrSafeBool (isKindOf n XRefObject)
+        local inGrp = false
+        try (inGrp = (isGroupMember n)) catch ()
+        local grpHead = false
+        try (grpHead = (isGroupHead n)) catch ()
+        local hidden = false
+        try (hidden = (n.isHidden)) catch ()
+        local rend = true
+        try (rend = (n.renderable)) catch ()
+        local primVis = true
+        try (primVis = (n.primaryVisibility)) catch ()
+        local anim = false
+        try (anim = (n.isAnimated)) catch ()
+        local bone = false
+        try (bone = (isKindOf n BoneGeometry)) catch ()
+        local xref = false
+        try (xref = (isKindOf n XRefObject)) catch ()
 
         local skin = false
         try (
@@ -151,8 +165,10 @@ fn mrNodeFacts = (
         append rows #(
             handle, nm, cls, supercls, faces, verts, baseHandle, mods, layerName,
             kids, hasParent, deps, inGrp, grpHead, hidden, rend, primVis,
-            anim, skin, bone, xref, scripted, negScale, coupled
+            anim, skin, bone, xref, scripted, negScale, differs
         )
+    )
+    catch ()
     )
     rows
 )
@@ -162,6 +178,27 @@ fn mrSuspiciousCallbacks = (
     -- callbacks.show PRINTS; it does not return. Capture the stream.
     callbacks.show to:ss
     ss as string
+)
+
+fn mrSceneTotals = (
+    -- Totals in ONE crossing. Calling getPolygonCount per node from Python is
+    -- ~10x slower per call, and stats() runs twice per batch — on a 50k-object
+    -- scene across 50 batches that is millions of crossings of pure overhead.
+    local polys = 0
+    local verts = 0
+    local geo = 0
+    for o in geometry do
+    (
+        try
+        (
+            local c = getPolygonCount o
+            polys += c[1]
+            verts += c[2]
+        )
+        catch ()
+        geo += 1
+    )
+    #(polys, verts, geo, objects.count, sceneMaterials.count)
 )
 
 fn mrSceneStates = (

@@ -277,3 +277,80 @@ def test_render_hidden_defaults_to_the_conservative_answer():
     index = source.index("def render_hidden")
     body = source[index : index + 400]
     assert "return True" in body
+
+
+def test_scene_totals_are_read_in_one_crossing_not_per_node():
+    """`stats()` runs twice per session and the session runs per batch. Counting
+    polygons with a per-node pymxs call there costs millions of crossings on a
+    large scene — the same O(n) trap that made collapse verification quadratic."""
+    tree = ast.parse((BRIDGE / "scene_query.py").read_text(encoding="utf-8"))
+    fn = next(
+        item
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        for item in node.body
+        if isinstance(item, ast.FunctionDef) and item.name == "stats"
+    )
+    loops_over_scene = [
+        n
+        for n in ast.walk(fn)
+        if isinstance(n, ast.For)
+        and isinstance(n.iter, ast.Attribute)
+        and n.iter.attr in ("geometry", "objects")
+    ]
+    assert not loops_over_scene, (
+        "stats() iterates the scene from Python — use the bulk MAXScript helper"
+    )
+    assert "mrSceneTotals" in ast.dump(fn)
+
+
+def test_proxy_export_uses_the_per_object_mode():
+    """`exportMultiple=False` is the single-file mode: it bakes world transforms
+    into the mesh and requires the proxy to sit at the origin. Combined with
+    autoCreateProxies applying the original transform too, the object ends up
+    displaced by its own position — a building 12 km from where it belongs, with
+    the run reporting success."""
+    tree = ast.parse((BRIDGE / "fix_services.py").read_text(encoding="utf-8"))
+    call = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "vrayMeshExport"
+    )
+    kwargs = {k.arg: k.value for k in call.keywords}
+    assert isinstance(kwargs["exportMultiple"], ast.Constant)
+    assert kwargs["exportMultiple"].value is True
+    assert kwargs["exportPointClouds"].value is False, "point clouds change the render"
+
+
+def test_proxy_conversion_verifies_the_object_did_not_move():
+    """A handle check cannot notice a transform applied twice. Only the bounding
+    box can."""
+    source = (BRIDGE / "fix_services.py").read_text(encoding="utf-8")
+    assert "_bounds_close" in source
+    index = source.index("def convert_to_proxy")
+    body = source[index : source.index("def set_proxy_display")]
+    assert "_bounds(node)" in body and "_bounds_close" in body
+
+
+def test_proxy_resolution_returns_a_node_not_a_base_object():
+    """getClassInstances yields base objects. A base object fails isValidNode,
+    so using one as a node handle makes the bounding-box display silently fail —
+    and the entire memory saving depends on that display mode."""
+    source = (BRIDGE / "fix_services.py").read_text(encoding="utf-8")
+    assert "dependentNodes" in source, "base objects must be walked back to nodes"
+    assert "isValidNode" in source
+
+
+def test_messages_after_the_export_never_claim_the_original_survived():
+    """autoCreateProxies deletes the original. Saying otherwise, at the moment
+    an operator most needs the truth, sends them to an undo that headless Max
+    does not honour."""
+    source = (BRIDGE / "fix_services.py").read_text(encoding="utf-8")
+    body = source[
+        source.index("proxy = self._resolve_created_node") :
+        source.index("def set_proxy_display")
+    ]
+    assert "left untouched" not in body
+    assert "recover from the backup" in body
