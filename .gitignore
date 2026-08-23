@@ -5,3 +5,5 @@ __pycache__/
 _scratch/
 .venv/
 .pytest_cache/
+fixtures/*.max
+fixtures/*.MAX

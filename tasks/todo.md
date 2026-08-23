@@ -10,7 +10,7 @@ bit-identical, on a 128 GB / 32 GB-VRAM box. Max 2026 · V-Ray 7 · Vantage 3.3.
 
 ## Blockers before anything can be verified
 
-- [ ] Copy one real `.max` to the dev machine (the monster + one small scene) — P1 is unverifiable without it
+- [ ] ⚠️ **Copy one real `.max` to `~/Desktop/maxrescue/fixtures/`** — the X-ray is BUILT and runnable; this is all that stands between it and real answers
 - [ ] Confirm 256 GB box availability for P0 spikes
 - [ ] Confirm whether Vantage runs on the same 128 GB box as V-Ray (if yes, the 70 GB budget must shrink)
 - [ ] Confirm whether the scene is animated (narrows collapse + proxy stages)
@@ -35,7 +35,7 @@ bit-identical, on a 128 GB / 32 GB-VRAM box. Max 2026 · V-Ray 7 · Vantage 3.3.
 - [x] **T7** `DllDirectory` + `ClassDirectory3` join, ClassID collision fix, **and** the signature scanner (malware vs suspicious separated; streaming with overlap so boundary-straddling matches are found). Missing-plugin *report* lands with T10
 - [x] **T8** shallow scene walk — 18 tests; per-object class+weight from headers alone, histogram, heaviest-N, geometry split, DerivedObject special-casing, degrades on damage instead of raising
 - [ ] **T9** T3 node graph (names `0x0962`, refs `0x2034`/`0x2035`, modifier stacks) — **degrades to T2 on unknowns, never raises**
-- [ ] **T10** `maxrescue xray <file>` → JSON + HTML report, verdict, degradation rate
+- [x] **T10** `maxrescue xray <file>` → text + JSON report, verdict, plugin list, malware findings, histogram. **HTML rendering deferred** (text+JSON cover the need)
 
 ### ✅ Checkpoint B — X-ray
 - [ ] Pure tests green on macOS with no Max
