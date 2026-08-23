@@ -146,17 +146,35 @@ def _hits(haystack: bytes, needle: bytes, limit: int | None = None) -> list[int]
 _Hit = tuple[str, Severity, str, int, str]  # signature, severity, encoding, offset, context
 
 
-def _raw_hits(data: bytes, base: int) -> list[_Hit]:
-    """Every match in one buffer, at absolute offsets.
+#: How many located positions to keep per signature per window. Only enough to
+#: report; the true count comes from `bytes.count`, which allocates nothing.
+_POSITION_CAP = MAX_HITS_PER_SIGNATURE * 4
+
+
+def _raw_hits(
+    data: bytes, base: int, count_from: int = 0
+) -> tuple[list[_Hit], dict[tuple[str, str], int]]:
+    """Located matches plus EXACT per-signature counts.
+
+    Positions are capped, because a stream containing a million occurrences of
+    `fopen` would otherwise build a million tuples each carrying 80 characters
+    of context. Counting is done separately with `bytes.count`, which is a
+    single pass and allocates nothing — so the report keeps the true number
+    while memory stays bounded.
+
+    `count_from` excludes a leading overlap region that a previous window has
+    already counted, so streaming totals are not inflated.
 
     Case-insensitivity works in both encodings because `bytes.lower()` lowers
     ASCII bytes and leaves the interleaved NULs of UTF-16LE untouched.
     """
     if not data:
-        return []
+        return [], {}
 
     lowered = data.lower()
+    countable = lowered[count_from:] if count_from else lowered
     hits: list[_Hit] = []
+    totals: dict[tuple[str, str], int] = {}
 
     for signature, severity in _SIGNATURES:
         for encoding, pattern in (
@@ -165,16 +183,25 @@ def _raw_hits(data: bytes, base: int) -> list[_Hit]:
         ):
             if not pattern:
                 continue
-            for position in _hits(lowered, pattern.lower()):
+            needle = pattern.lower()
+            found = countable.count(needle)
+            if found:
+                key = (signature, encoding)
+                totals[key] = totals.get(key, 0) + found
+            for position in _hits(lowered, needle, limit=_POSITION_CAP):
                 start = max(0, position - _CONTEXT)
                 context = _printable(data[start : position + len(pattern) + _CONTEXT])
                 hits.append(
                     (signature, severity, encoding, base + position, context)
                 )
-    return hits
+    return hits, totals
 
 
-def _summarise(hits: Iterable[_Hit], stream: str) -> list[Finding]:
+def _summarise(
+    hits: Iterable[_Hit],
+    stream: str,
+    totals: dict[tuple[str, str], int] | None = None,
+) -> list[Finding]:
     """Cap repeated hits of one signature while keeping the true count.
 
     A payload written 500 times is one finding with a count, not 500 findings —
@@ -185,9 +212,9 @@ def _summarise(hits: Iterable[_Hit], stream: str) -> list[Finding]:
         grouped.setdefault((hit[0], hit[2]), []).append(hit)
 
     findings: list[Finding] = []
-    for group in grouped.values():
+    for key, group in grouped.items():
         group.sort(key=lambda h: h[3])
-        total = len(group)
+        total = (totals or {}).get(key, len(group))
         for signature, severity, encoding, offset, context in group[
             :MAX_HITS_PER_SIGNATURE
         ]:
@@ -209,7 +236,8 @@ def _summarise(hits: Iterable[_Hit], stream: str) -> list[Finding]:
 
 def scan_bytes(data: bytes, stream: str) -> list[Finding]:
     """Scan a whole buffer. For the small streams, read in full."""
-    return _summarise(_raw_hits(data, 0), stream)
+    hits, totals = _raw_hits(data, 0)
+    return _summarise(hits, stream, totals)
 
 
 def scan_stream(
@@ -233,6 +261,7 @@ def scan_stream(
     overlap = _MAX_PATTERN_BYTES
 
     seen: dict[tuple[str, str, int], _Hit] = {}
+    totals: dict[tuple[str, str], int] = {}
     position = 0
 
     while position < size:
@@ -240,13 +269,20 @@ def scan_stream(
         chunk = fp.read(min(window, size - position))
         if not chunk:
             break
-        for hit in _raw_hits(chunk, position):
+        # Skip the re-read overlap when COUNTING, or every match in it is
+        # counted twice.
+        chunk_hits, chunk_totals = _raw_hits(
+            chunk, position, count_from=overlap if position else 0
+        )
+        for hit in chunk_hits:
             seen.setdefault((hit[0], hit[2], hit[3]), hit)
+        for key, value in chunk_totals.items():
+            totals[key] = totals.get(key, 0) + value
         if position + len(chunk) >= size:
             break
         position += len(chunk) - overlap
 
-    return _summarise(seen.values(), stream)
+    return _summarise(seen.values(), stream, totals)
 
 
 def scan_max_file(max_file, streams: Iterable[str] | None = None) -> list[Finding]:

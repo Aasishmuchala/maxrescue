@@ -314,3 +314,27 @@ def test_hygiene_runs_before_anything_destructive():
     report, _, _ = run(ctx)
     first = report.results[0]
     assert first.stage is Stage.HYGIENE
+
+
+def test_a_missing_capability_is_reported_as_not_done_never_as_applied():
+    """A headless build without BitmapProxyMgr or NitrousGraphicsManager used to
+    report both viewport levers as applied, and memory freed by other stages was
+    then credited to levers that never ran."""
+    ctx = make_context()
+    ctx.fixes.bitmap_manager_missing = True
+    ctx.fixes.nitrous_missing = True
+    report, _, _ = run(ctx)
+
+    not_done = {r.op_id for r in report.not_applicable}
+    assert "viewport.bitmap_flush" in not_done
+    assert "viewport.nitrous" in not_done
+    assert all(r.message for r in report.not_applicable), "each must say why"
+    assert any("NOT DONE" in line for line in report.log)
+    assert "viewport.bitmap_flush" not in {r.op_id for r in report.applied}
+
+
+def test_a_capability_that_works_is_still_reported_as_applied():
+    ctx = make_context()
+    report, _, _ = run(ctx)
+    assert "viewport.bitmap_flush" in {r.op_id for r in report.applied}
+    assert not report.not_applicable

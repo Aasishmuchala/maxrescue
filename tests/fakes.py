@@ -223,6 +223,7 @@ class FakeFixServices:
         self.calls: list[str] = []
         self.bitmap_mode: str | None = None
         self.nitrous_limit: int | None = None
+        self.notes: list[str] = []
         self.scatter_display: dict[int, str] = {}
 
     # -- hygiene
@@ -310,14 +311,26 @@ class FakeFixServices:
         self.calls.append(f"proxy_display:{handle}:{mode}")
 
     # -- viewport
-    def set_bitmap_proxy_mode(self, mode: str) -> None:
+    #: Set to model a build where these managers simply are not present.
+    bitmap_manager_missing = False
+    nitrous_missing = False
+
+    def set_bitmap_proxy_mode(self, mode: str) -> bool:
         assert "UseProxies" not in mode, "that mode changes the render"
+        if self.bitmap_manager_missing:
+            self.notes.append("BitmapProxyMgr unavailable")
+            return False
         self.bitmap_mode = mode
         self.scene.rss_mb -= 1200
+        return True
 
-    def set_nitrous_texture_limit(self, pixels: int) -> None:
+    def set_nitrous_texture_limit(self, pixels: int) -> bool:
+        if self.nitrous_missing:
+            self.notes.append("NitrousGraphicsManager unavailable")
+            return False
         self.nitrous_limit = pixels
         self.scene.vram_mb -= 400
+        return True
 
     def set_scatter_display(self, handle: int, mode: str) -> bool:
         if handle not in self.scene.nodes:

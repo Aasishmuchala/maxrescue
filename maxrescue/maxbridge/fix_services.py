@@ -337,7 +337,13 @@ class MaxFixServices:
 
     # -- viewport-only levers ---------------------------------------------
 
-    def set_bitmap_proxy_mode(self, mode: str = BITMAP_MODE_SAFE) -> None:
+    def set_bitmap_proxy_mode(self, mode: str = BITMAP_MODE_SAFE) -> bool:
+        """True only if the setting actually took.
+
+        Returning None regardless meant a headless session with no
+        `BitmapProxyMgr` reported this lever as applied, and memory freed
+        elsewhere was then credited to it.
+        """
         if "UseProxies" in mode:
             raise ValueError(
                 "renderMode_UseProxies renders the downscaled image and changes "
@@ -345,16 +351,28 @@ class MaxFixServices:
             )
         manager = getattr(rt, "BitmapProxyMgr", None)
         if manager is None:
-            self.notes.append("BitmapProxyMgr unavailable; bitmap paging skipped")
-            return
-        manager.globalProxyEnable = True
-        manager.globalProxyRenderMode = rt.name(mode)
+            self.notes.append(
+                "BitmapProxyMgr is not available on this build — bitmap paging "
+                "did NOT happen"
+            )
+            return False
+        try:
+            manager.globalProxyEnable = True
+            manager.globalProxyRenderMode = rt.name(mode)
+            return True
+        except Exception as exc:
+            self.notes.append(f"bitmap paging could not be set: {exc}")
+            return False
 
-    def set_nitrous_texture_limit(self, pixels: int) -> None:
+    def set_nitrous_texture_limit(self, pixels: int) -> bool:
         manager = getattr(rt, "NitrousGraphicsManager", None)
         if manager is None:
-            self.notes.append("NitrousGraphicsManager unavailable; VRAM cap skipped")
-            return
+            self.notes.append(
+                "NitrousGraphicsManager is not available on this build — the "
+                "viewport texture cap did NOT happen"
+            )
+            return False
+        applied = False
         for setter, argument in (
             ("SetTextureSizeLimit", (pixels, True)),
             ("SetBackgroundTextureSizeLimit", (pixels, True)),
@@ -362,12 +380,14 @@ class MaxFixServices:
         ):
             try:
                 getattr(manager, setter)(*argument)
+                applied = True
             except Exception as exc:
                 self.notes.append(f"{setter} failed: {exc}")
         try:
             manager.ForceDisableMipMapGeneration(True)
         except Exception:
             pass
+        return applied
 
     def set_scatter_display(self, handle: int, mode: str = "points") -> bool:
         """Switch a scatter object to a cheap viewport representation.

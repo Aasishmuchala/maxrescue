@@ -376,3 +376,37 @@ def test_stress_a_large_stream_is_not_materialised_by_the_walk():
     assert stream.bytes_read < 4096, (
         f"the walk pulled {stream.bytes_read:,} bytes through for 21 headers"
     )
+
+
+def test_stress_a_million_hits_are_counted_exactly_without_a_million_objects():
+    """Bounding the located positions must not cost the true count: `.count()`
+    is a single allocation-free pass, so the report keeps the real number while
+    memory stays flat."""
+    import tracemalloc
+
+    data = b"fopen " * 200_000
+    tracemalloc.start()
+    findings = scan_bytes(data, "Scene")
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    assert findings
+    assert findings[0].occurrences == 200_000, "the true count must survive"
+    assert len(findings) <= 5, "only a handful of located examples are kept"
+    assert peak < 30 * len(data), f"peak {peak:,} bytes for {len(data):,} of input"
+
+
+def test_stress_streaming_counts_are_not_inflated_by_the_overlap():
+    """The overlap region is read twice. Counting it twice would report double."""
+    import io as _io
+
+    payload = b"CRP_BScript"
+    data = b"." * 400 + payload + b"." * 400 + payload + b"." * 400
+    found = scan_stream(_io.BytesIO(data), "Scene", len(data), window=512)
+    # One Finding per located example (capped), each carrying the true total.
+    assert {f.signature for f in found} == {"CRP_BScript"}
+    assert len(found) == 2, "both occurrences should be located"
+    assert all(f.occurrences == 2 for f in found), (
+        f"counted {[f.occurrences for f in found]}, expected 2 — the overlap "
+        "region is read twice and must not be counted twice"
+    )

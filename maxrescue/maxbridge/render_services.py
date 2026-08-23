@@ -28,9 +28,12 @@ _TRACKED = (
     "output_splitgbuffer",
     "system_vrayLog_level",
     "lightcache_mode",
+    "lightcache_loadFileName",
     "lightcache_saveFileName",
     "lightcache_autoSave",
     "lightcache_dontDelete",
+    "options_dontRenderImage",
+    "imageSampler_renderMask_type",
 )
 
 
@@ -80,8 +83,26 @@ class MaxRenderServices:
                     "could not set the light cache to load from file — two "
                     "renders may differ for reasons unrelated to the change"
                 )
+            # LOAD, not save. Setting only the save name recomputes the cache
+            # on both sides of the comparison, so two renders of an unmodified
+            # scene differ and the gate rejects everything.
+            if not _set(renderer, "lightcache_loadFileName", light_cache_file):
+                self.notes.append(
+                    "lightcache_loadFileName could not be set — renders will not "
+                    "be reproducible and any diff is meaningless"
+                )
             _set(renderer, "lightcache_saveFileName", light_cache_file)
             _set(renderer, "lightcache_dontDelete", True)
+
+        # The denoiser is a post-process; leaving it on compares denoised
+        # images and hides exactly the small differences the gate exists to
+        # find. Named as a requirement in the research, and previously absent.
+        for element in ("VRayDenoiser", "VRayVFB_denoiser"):
+            try:
+                for instance in rt.getClassInstances(getattr(rt, element)) or []:
+                    instance.enabled = False
+            except Exception:
+                continue
 
         try:
             rt.rendShowVFB = False

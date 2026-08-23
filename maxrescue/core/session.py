@@ -167,7 +167,12 @@ class RescueSession:
                 result = self._apply(op, before=ctx.memory.sample())
                 results.append(result)
                 if result.status is OpStatus.APPLIED:
-                    log.append(f"  + {op.title}")
+                    log.append(
+                        f"  + {op.title}"
+                        + (f" ({result.message})" if result.message else "")
+                    )
+                elif result.status is OpStatus.NOT_APPLICABLE:
+                    log.append(f"  · {op.title} — NOT DONE: {result.message}")
                 else:
                     log.append(f"  ! {op.title} — {result.message}")
                     halted = True
@@ -240,8 +245,9 @@ class RescueSession:
     def _apply(self, op: Op, before) -> OpResult:
         ctx = self.context
         try:
+            notes_before = len(getattr(ctx.fixes, "notes", ()))
             with ctx.undo.transaction(op.title):
-                self._dispatch(op)
+                acted = self._dispatch(op)
         except Exception as exc:
             return OpResult(op.id, op.stage, OpStatus.FAILED, str(exc), memory_before=before)
 
@@ -260,17 +266,37 @@ class RescueSession:
                 memory_before=before,
             )
 
+        # Anything the bridge recorded while running this op — a missing
+        # manager, a property it refused to guess — becomes part of the result.
+        # These notes were previously written and read by nobody, so a lever
+        # that did not exist was reported as applied.
+        notes = list(getattr(ctx.fixes, "notes", ())[notes_before:])
+        message = "; ".join(notes)
+
         ctx.memory.settle()
+        if acted is False:
+            return OpResult(
+                op.id,
+                op.stage,
+                OpStatus.NOT_APPLICABLE,
+                message or "the capability is not available on this build",
+                memory_before=before,
+            )
         return OpResult(
             op.id,
             op.stage,
             OpStatus.APPLIED,
+            message,
             verified=True,
             memory_before=before,
             memory_after=ctx.memory.sample(),
         )
 
-    def _dispatch(self, op: Op) -> None:
+    def _dispatch(self, op: Op) -> bool | None:
+        """Run the op. Returns False when the capability is simply absent.
+
+        `None` means "no meaningful signal" and is treated as applied.
+        """
         fixes = self.context.fixes
 
         if op.stage is Stage.HYGIENE:
@@ -306,12 +332,15 @@ class RescueSession:
 
         elif op.stage is Stage.VIEWPORT:
             if op.id == "viewport.bitmap_flush":
-                fixes.set_bitmap_proxy_mode(op.payload["mode"])
-            elif op.id == "viewport.nitrous":
-                fixes.set_nitrous_texture_limit(op.payload["pixels"])
-            elif op.id == "viewport.scatter":
-                for handle in op.targets:
-                    fixes.set_scatter_display(handle, "points")
+                return fixes.set_bitmap_proxy_mode(op.payload["mode"]) is not False
+            if op.id == "viewport.nitrous":
+                return fixes.set_nitrous_texture_limit(op.payload["pixels"]) is not False
+            if op.id == "viewport.scatter":
+                acted = [
+                    bool(fixes.set_scatter_display(handle, "points"))
+                    for handle in op.targets
+                ]
+                return any(acted)
 
         elif op.stage is Stage.BITMAP:
             fixes.convert_bitmaps_to_vray()

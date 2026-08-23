@@ -51,4 +51,12 @@ class MaxBackupService:
         ok = rt.saveMaxFile(path, useNewFile=False, quiet=True, clearNeedSaveFlag=False)
         if not ok or not os.path.exists(path):
             raise IOError(f"saveMaxFile reported failure for {path}")
+        # A 0-byte or stub file passes an existence check, and the run then
+        # proceeds believing it has a safety net it does not have.
+        size = os.path.getsize(path)
+        if size < 4096:
+            raise IOError(
+                f"backup at {path} is only {size} bytes — no .max file is that "
+                "small, so this is not a usable backup"
+            )
         return path

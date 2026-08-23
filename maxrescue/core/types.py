@@ -79,6 +79,14 @@ class Stage(Enum):
 class OpStatus(Enum):
     PENDING = "pending"
     APPLIED = "applied"
+    NOT_APPLICABLE = "not applicable"
+    """The operation could not act — the capability is absent on this build.
+
+    Deliberately distinct from APPLIED. A headless session without
+    `NitrousGraphicsManager` or `BitmapProxyMgr` previously reported both
+    viewport ops as applied, and the memory freed by other stages was then
+    attributed to levers that never ran.
+    """
     SKIPPED = "skipped"
     FAILED = "failed"
     ROLLED_BACK = "rolled back"
@@ -282,6 +290,10 @@ class RunReport:
     @property
     def applied(self) -> tuple[OpResult, ...]:
         return tuple(r for r in self.results if r.status is OpStatus.APPLIED)
+
+    @property
+    def not_applicable(self) -> tuple[OpResult, ...]:
+        return tuple(r for r in self.results if r.status is OpStatus.NOT_APPLICABLE)
 
     @property
     def ok(self) -> bool:

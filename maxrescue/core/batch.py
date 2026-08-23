@@ -235,8 +235,11 @@ class BatchRunner:
             memory_after=memory_after,
             log=tuple(log + [self._headline(reports, memory_after)]),
         )
-        yield ProgressEvent("done", "finished", 1.0, report=None)
+        # Set BEFORE the final yield: a consumer that breaks out of the loop on
+        # the "done" event would otherwise find `outcome` unset and lose every
+        # batch report.
         self.outcome = outcome
+        yield ProgressEvent("done", "finished", 1.0, report=None)
 
     # -- one batch --------------------------------------------------------
 
