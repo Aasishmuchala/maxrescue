@@ -160,3 +160,21 @@ def pad_chunks(payload: bytes, minimum: int = MINI_CUTOFF) -> bytes:
     if needed < 6:
         needed = 6
     return payload + struct.pack("<HI", 0x7FFF, needed) + b"\x00" * (needed - 6)
+
+
+def scene_stream(body: bytes, version_ident: int = 0x2012) -> bytes:
+    """Wrap chunk `body` as a realistic `Scene` stream.
+
+    A real Scene stream has exactly ONE top-level chunk — the version container
+    — with every object inside it. So the padding needed to clear this writer's
+    4096-byte floor goes INSIDE that container. Padding outside it would appear
+    as a second top-level chunk, which the walk would count as an enormous
+    object and every verdict would then be wrong for a purely synthetic reason.
+    """
+    from tests.helpers import container
+
+    shortfall = MINI_CUTOFF - (len(body) + 6)
+    if shortfall > 0:
+        filler = max(shortfall, 6)
+        body = body + struct.pack("<HI", 0x7FFF, filler) + b"\x00" * (filler - 6)
+    return container(version_ident, body)

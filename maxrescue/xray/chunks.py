@@ -29,7 +29,14 @@ import struct
 from dataclasses import dataclass
 from typing import BinaryIO, Iterator
 
-__all__ = ["Chunk", "ChunkError", "ChunkReader", "iter_chunks", "walk_chunks"]
+__all__ = [
+    "STRUCTURAL_DEPTH_LIMIT",
+    "Chunk",
+    "ChunkError",
+    "ChunkReader",
+    "iter_chunks",
+    "walk_chunks",
+]
 
 _NARROW_HEADER = 6
 _WIDE_HEADER = 14
@@ -37,6 +44,11 @@ _CONTAINER_32 = 0x80000000
 _CONTAINER_64 = 0x8000000000000000
 _SIZE_MASK_32 = 0x7FFFFFFF
 _SIZE_MASK_64 = 0x7FFFFFFFFFFFFFFF
+
+#: How deep container nesting may go before the file is treated as damaged.
+#: Real scenes nest a handful of levels; this exists so a hostile file gets a
+#: typed error instead of crashing the process with a RecursionError.
+STRUCTURAL_DEPTH_LIMIT = 256
 
 _HEAD_32 = struct.Struct("<HI")
 _WIDE_LEN = struct.Struct("<Q")
@@ -151,15 +163,43 @@ def walk_chunks(
     start: int = 0,
     end: int | None = None,
     max_depth: int | None = None,
-    _depth: int = 0,
+    depth_limit: int = STRUCTURAL_DEPTH_LIMIT,
 ) -> Iterator[tuple[Chunk, int]]:
-    """Depth-first walk yielding `(chunk, depth)`, descending into containers."""
-    for chunk in iter_chunks(data, start, end):
-        yield chunk, _depth
-        if chunk.is_container and (max_depth is None or _depth < max_depth):
-            yield from walk_chunks(
-                data, chunk.payload_start, chunk.end, max_depth, _depth + 1
+    """Depth-first walk yielding `(chunk, depth)`, descending into containers.
+
+    Iterative on purpose. The obvious recursive version dies with a
+    `RecursionError` on a file nesting containers ~1000 deep — which is trivial
+    to construct and escapes as a crash rather than as a diagnosis, since a
+    caller can only reasonably catch :class:`ChunkError`.
+
+    `depth_limit` is a structural sanity bound, not a feature: real scenes nest
+    a handful of levels, so anything past a few hundred is a damaged or hostile
+    file and gets a typed error naming the depth.
+    """
+    limit = len(data) if end is None else end
+    stack: list[tuple[Iterator[Chunk], int]] = [(iter_chunks(data, start, limit), 0)]
+
+    while stack:
+        iterator, depth = stack[-1]
+        try:
+            chunk = next(iterator)
+        except StopIteration:
+            stack.pop()
+            continue
+
+        yield chunk, depth
+
+        if not chunk.is_container:
+            continue
+        if max_depth is not None and depth >= max_depth:
+            continue
+        if depth + 1 >= depth_limit:
+            raise ChunkError(
+                f"container nesting deeper than {depth_limit} levels — the file "
+                "is damaged or hostile",
+                chunk.start,
             )
+        stack.append((iter_chunks(data, chunk.payload_start, chunk.end), depth + 1))
 
 
 class ChunkReader:

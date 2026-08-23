@@ -295,9 +295,11 @@ class RescueSession:
             return all(not query.node_exists(h) for h in op.targets)
         if op.stage is Stage.COLLAPSE:
             for handle in op.targets:
-                for node in query.nodes():
-                    if node.handle == handle and node.modifier_classes:
-                        return False
+                remaining = query.modifier_count(handle)
+                # Unknown is not success. A node whose stack cannot be read has
+                # not been shown to be collapsed.
+                if remaining is None or remaining > 0:
+                    return False
             return True
         # Hygiene and viewport ops have no per-object post-condition worth
         # asserting; their effect is measured, not counted.

@@ -120,6 +120,20 @@ class MaxSceneQuery:
         except Exception:
             return False
 
+    def modifier_count(self, handle: int) -> int | None:
+        """One node's stack depth. Targeted on purpose — see the port docstring.
+
+        Returns None rather than 0 when the node cannot be read, so an
+        unreadable node is never mistaken for a successfully collapsed one.
+        """
+        try:
+            node = rt.getAnimByHandle(handle)
+            if node is None or not rt.isValidNode(node):
+                return None
+            return int(node.modifiers.count)
+        except Exception:
+            return None
+
     # -- materials ---------------------------------------------------------
 
     def material_in_use(self, handle: int) -> bool:

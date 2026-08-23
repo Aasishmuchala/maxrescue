@@ -197,6 +197,10 @@ class FakeSceneQuery:
     def node_exists(self, handle: int) -> bool:
         return handle in self.scene.nodes
 
+    def modifier_count(self, handle: int) -> int | None:
+        node = self.scene.nodes.get(handle)
+        return None if node is None else len(node.modifier_classes)
+
     def material_in_use(self, handle: int) -> bool:
         return handle in self.scene.used_materials
 

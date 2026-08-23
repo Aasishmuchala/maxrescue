@@ -95,6 +95,19 @@ class SceneQuery(Protocol):
     def node_exists(self, handle: int) -> bool:
         return False
 
+    def modifier_count(self, handle: int) -> int | None:
+        """How many modifiers one node carries, or None if it cannot be read.
+
+        Deliberately a single-node query. Verifying a collapse by re-reading
+        `nodes()` costs a full scene crossing PER OPERATION, which turns a scene
+        with thousands of collapse targets into thousands of full scene reads —
+        the same O(n^2) shape that produced a nine-minute stall in a sibling
+        project.
+
+        `None` means "could not tell", which must never be read as success.
+        """
+        return None
+
     def material_in_use(self, handle: int) -> bool:
         """Usage, never library membership.
 
