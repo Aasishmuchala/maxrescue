@@ -12,9 +12,13 @@ dependencies = ["olefile>=0.46"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+app = ["PySide6>=6.5"]
 
 [project.scripts]
 maxrescue = "maxrescue.app.cli:main"
+
+[project.gui-scripts]
+maxrescue-app = "maxrescue.ui.window:main"
 
 [tool.setuptools.packages.find]
 include = ["maxrescue*"]

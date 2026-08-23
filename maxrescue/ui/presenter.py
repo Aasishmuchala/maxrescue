@@ -14,14 +14,54 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from maxrescue.core.requirements import assess
 from maxrescue.xray.report import Verdict, XrayReport
 
-__all__ = ["AppState", "Fact", "Phase", "ViewModel", "present"]
+__all__ = [
+    "AppState",
+    "Fact",
+    "Outcome",
+    "Phase",
+    "Progress",
+    "ViewModel",
+    "present",
+]
 
 
 class Phase(Enum):
     EMPTY = "empty"
     SURVEYED = "surveyed"
+    RUNNING = "running"
+    DONE = "done"
+
+
+@dataclass(frozen=True)
+class Progress:
+    fraction: float = 0.0
+    message: str = ""
+    resident_mb: float = 0.0
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """What the run produced. Every field is measured, none inferred."""
+
+    output_path: str = ""
+    open_rss_mb: float = 0.0
+    peak_rss_mb: float = 0.0
+    vram_mb: float | None = None
+    objects_merged: int = 0
+    objects_requested: int = 0
+    textures_reduced: int = 0
+    verified: bool | None = None
+    """True = renders proved identical · False = they differ · None = not checked.
+    The three are kept apart because 'not checked' must never read as 'fine'."""
+
+    problems: tuple[str, ...] = ()
+
+    @property
+    def shortfall(self) -> int:
+        return max(0, self.objects_requested - self.objects_merged)
 
 
 @dataclass(frozen=True)
@@ -41,6 +81,7 @@ class ViewModel:
     warnings: tuple[str, ...] = ()
     can_rescue: bool = False
     rescue_label: str = ""
+    progress: float | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +90,8 @@ class AppState:
 
     path: str | None = None
     survey: XrayReport | None = None
+    progress: Progress | None = None
+    outcome: Outcome | None = None
 
 
 def _size(value: float) -> str:
@@ -127,7 +170,106 @@ def _warnings(survey: XrayReport) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _running(state: AppState) -> ViewModel:
+    progress = state.progress
+    facts = [
+        Fact("Doing", progress.message or "working"),
+    ]
+    if progress.resident_mb:
+        facts.append(Fact("Memory in use", f"{progress.resident_mb / 1024:,.1f} GB"))
+    return ViewModel(
+        phase=Phase.RUNNING,
+        headline="Rescuing this scene",
+        detail=progress.message or "working",
+        facts=tuple(facts),
+        # Starting again would merge everything a second time.
+        can_rescue=False,
+        rescue_label="Working…",
+        progress=progress.fraction,
+    )
+
+
+def _done(state: AppState) -> ViewModel:
+    outcome = state.outcome
+    requirements = assess(
+        open_rss_mb=outcome.open_rss_mb,
+        peak_rss_mb=outcome.peak_rss_mb,
+        vram_mb=outcome.vram_mb,
+    )
+
+    if outcome.verified is True:
+        headline = "Done — and the renders are identical"
+    elif outcome.verified is False:
+        headline = "Done, but the renders DIFFER"
+    else:
+        headline = "Done"
+
+    facts = [Fact("Saved to", outcome.output_path or "—")]
+    if requirements.measured:
+        facts.append(
+            Fact("Opens at", f"{requirements.open_rss_gb:,.1f} GB (measured here)")
+        )
+        facts.append(
+            Fact(
+                "Runs comfortably on",
+                f"{requirements.recommended_ram_gb} GB RAM"
+                + (
+                    f" · {requirements.recommended_vram_gb} GB VRAM"
+                    if requirements.recommended_vram_gb
+                    else ""
+                ),
+            )
+        )
+    facts.append(
+        Fact("Objects", f"{outcome.objects_merged:,} of {outcome.objects_requested:,}")
+    )
+    if outcome.textures_reduced:
+        facts.append(
+            Fact(
+                "Textures reduced",
+                f"{outcome.textures_reduced:,} — originals kept, only the links moved",
+            )
+        )
+
+    warnings: list[str] = []
+    if outcome.verified is False:
+        warnings.append(
+            "The rescued scene does not render identically to the reference. "
+            "Do not ship this file — send the report and both frames."
+        )
+    elif outcome.verified is None:
+        warnings.append(
+            "Renders were NOT verified — no reference frame was supplied, so "
+            "nothing here proves the image is unchanged."
+        )
+    if outcome.shortfall:
+        warnings.append(
+            f"{outcome.shortfall:,} object(s) never arrived and are NOT in the "
+            "output file."
+        )
+    warnings.extend(outcome.problems)
+
+    return ViewModel(
+        phase=Phase.DONE,
+        headline=headline,
+        detail=(
+            f"{requirements.summary} {requirements.reasoning}"
+            if requirements.measured
+            else f"Saved to {outcome.output_path}."
+        ),
+        facts=tuple(facts),
+        warnings=tuple(warnings),
+        can_rescue=False,
+        rescue_label="Rescue another scene",
+        progress=1.0,
+    )
+
+
 def present(state: AppState) -> ViewModel:
+    if state.outcome is not None:
+        return _done(state)
+    if state.progress is not None and state.survey is not None:
+        return _running(state)
     if state.survey is None:
         return ViewModel(
             phase=Phase.EMPTY,
