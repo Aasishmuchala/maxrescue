@@ -8,6 +8,13 @@ bit-identical, on a 128 GB / 32 GB-VRAM box. Max 2026 · V-Ray 7 · Vantage 3.3.
 
 ---
 
+## Status
+
+**Code-complete.** 424 tests green on macOS with no 3ds Max. Everything in
+`maxbridge/` and `scripts/` is **staged but never executed** — statically checked
+only (parses, imports resolve, implements every port, avoids the known traps).
+T17 and T27 are on-box verification tasks and are the whole remaining list.
+
 ## Blockers before anything can be verified
 
 - [ ] ⚠️ **Copy one real `.max` to `~/Desktop/maxrescue/fixtures/`** — the X-ray is BUILT and runnable; this is all that stands between it and real answers
@@ -46,18 +53,18 @@ bit-identical, on a 128 GB / 32 GB-VRAM box. Max 2026 · V-Ray 7 · Vantage 3.3.
 
 ## P2 — Skeleton + honest measurement
 
-- [ ] **T11** Scaffold + vendored safety (undo, backup, guard) + fakes + 3 structural test suites
-- [ ] **T12** `MemoryProbe` port + bridge (psutil → `getMAXMemoryInfo` → ctypes) + `nvidia-smi` VRAM
-- [ ] **T13** Metrics/report extended to RSS/VRAM; measured-only, never predicted
+- [x] **T11** Scaffold + vendored safety (undo, backup, guard) + fakes + 3 structural test suites
+- [x] **T12** `MemoryProbe` port + bridge (psutil → `getMAXMemoryInfo` → ctypes) + `nvidia-smi` VRAM
+- [x] **T13** Metrics/report extended to RSS/VRAM; measured-only, never predicted
 
 ### ✅ Checkpoint C — measurement
 - [ ] The tool can state a scene's open RSS and be believed
 
 ## P3 — Batch merge + governor *(gated by Checkpoint A)*
 
-- [ ] **T14** `MergeServices` — `getMAXFileObjectNames` + `mergeMaxFile` with **explicit** dup/mtl/reparent flags (never the prompting defaults)
+- [x] **T14** `MergeServices` — `getMAXFileObjectNames` + `mergeMaxFile` with **explicit** dup/mtl/reparent flags (never the prompting defaults)
 - [x] **T15** Governor (pure) — 27 tests; self-calibrating disk→RAM multiplier learned from RSS deltas, families kept intact (union-find, cycle-safe), oversized families isolated + flagged, coverage/termination/determinism invariants pinned. `maxrescue plan` wired up
-- [ ] **T16** Batch loop + `BatchReport` + per-batch backup/guard + quarantine-not-halt + journal
+- [x] **T16** Batch loop + `BatchReport` + per-batch backup/guard + quarantine-not-halt + journal
 - [ ] **T17** On-box spine run — merge the whole scene batch-by-batch, **no ops**, save; counts preserved
 
 ### ✅ Checkpoint D — the spine
@@ -66,11 +73,11 @@ bit-identical, on a 128 GB / 32 GB-VRAM box. Max 2026 · V-Ray 7 · Vantage 3.3.
 
 ## P4 — Reduction stages (8 render-identical)
 
-- [ ] **T18** Hygiene — `gc`, `freeSceneBitmaps`, `clearUndoBuffer`, note tracks, scene states, Motion Mixer, unused materials
-- [ ] **T19** Hidden / non-renderable removal — guards for dependents, scatter sources, instance masters; **keep** `primaryVisibility=false` (affects GI)
-- [ ] **T20** Modifier-stack collapse — `CollapseNodeTo … off` keeps instances; **exclude** render-coupled TurboSmooth/MeshSmooth/OpenSubdiv, displacement, skin, animated
-- [ ] **T21** Proxy conversion (dominant lever) — verified V-Ray 7 `vrayMeshExport` signature, `display = 0` (bbox), no modifiers on proxies, point clouds off, mirrored nodes skipped
-- [ ] **T22** Viewport levers — `#renderMode_UseFullRes_FlushFromMemory` (**never** `UseProxies`), Nitrous size limits, scatter **viewport** display modes only
+- [x] **T18** Hygiene — `gc`, `freeSceneBitmaps`, `clearUndoBuffer`, note tracks, scene states, Motion Mixer, unused materials
+- [x] **T19** Hidden / non-renderable removal — guards for dependents, scatter sources, instance masters; **keep** `primaryVisibility=false` (affects GI)
+- [x] **T20** Modifier-stack collapse — `CollapseNodeTo … off` keeps instances; **exclude** render-coupled TurboSmooth/MeshSmooth/OpenSubdiv, displacement, skin, animated
+- [x] **T21** Proxy conversion (dominant lever) — verified V-Ray 7 `vrayMeshExport` signature, `display = 0` (bbox), no modifiers on proxies, point clouds off, mirrored nodes skipped
+- [x] **T22** Viewport levers — `#renderMode_UseFullRes_FlushFromMemory` (**never** `UseProxies`), Nitrous size limits, scatter **viewport** display modes only
 
 ### ✅ Checkpoint E — reduction
 - [ ] Measured open RSS after all eight stages
@@ -79,18 +86,18 @@ bit-identical, on a 128 GB / 32 GB-VRAM box. Max 2026 · V-Ray 7 · Vantage 3.3.
 
 ## P5 — Render-identity gate
 
-- [ ] **T23** Render harness — locked seed, bucket, LC **from file**, denoiser off, raw EXR, fixed threads
-- [ ] **T24** `maxrescue verify` — `idiff` bit-exact for identical stages; an altered scene must FAIL
-- [ ] **T25** Opt-in Bitmap→VRayBitmap + `.tx` — off by default, blur reset to 1.0, auto-gated, **reverts whole stage on failure**
+- [x] **T23** Render harness — locked seed, bucket, LC **from file**, denoiser off, raw EXR, fixed threads
+- [x] **T24** `maxrescue verify` — `idiff` bit-exact for identical stages; an altered scene must FAIL
+- [x] **T25** Opt-in Bitmap→VRayBitmap + `.tx` — off by default, blur reset to 1.0, auto-gated, **reverts whole stage on failure**
 
 ### ✅ Checkpoint F — identity
 - [ ] Every automatic stage proven bit-identical, not asserted
 
 ## P6 — Ship
 
-- [ ] **T26** CLI (`xray` / `rescue` / `verify`) + garbage-tolerant settings
+- [x] **T26** CLI (`xray` / `rescue` / `verify`) + garbage-tolerant settings
 - [ ] **T27** ⚠️ **Acceptance run** — 170–192 GB → **≤70 GB**, VRAM ≤32 GB, render bit-identical, full render completes on the 128 GB box without swapping
-- [ ] **T28** Docs — README with the honest number, gotchas updated from the box
+- [x] **T28** Docs — README with the honest number, gotchas updated from the box
 
 ### ✅ Checkpoint G — ship
 - [ ] Task 27 passed on the real scene

@@ -72,7 +72,42 @@ leaves everything that already ran. Send the partial file.
 
 ---
 
-## Step 2 — the four open questions
+## Step 2 — the rescue itself (the rest of the session)
+
+Only after S1 comes back `MERGE_SELECTIVE`. If it came back `MERGE_FULL`, stop
+and send me the report — the architecture needs revising before this is worth
+running.
+
+```powershell
+pwsh scripts\run_rescue.ps1 -Target "D:\jobs\villa\villa.max" -CeilingGB 70
+```
+
+It X-rays first and **refuses** to run on a file with a known payload signature.
+Then it resets to an empty scene and, for each batch: merges → measures →
+reduces → saves. The source file is never modified; output is
+`<name>_rescued.max` beside it.
+
+Watch for:
+
+- **`RESCUE_OK`** in `rescue-out\_rescue_result.txt`, and the peak RSS in
+  `rescue_report.json`. Peak is what matters, not the final figure.
+- **`RESCUE_PARTIAL`** — some objects never merged. The report names every one.
+- **`RESCUE_HALTED`** — a reduction failed. Batches up to that point are saved;
+  the log says which to exclude on a re-run.
+- **Exit -6** from the launcher means out of memory: lower `-CeilingGB` and
+  re-run. The governor will resize the batches from what it measured.
+
+Then prove the contract held:
+
+```powershell
+# render the same frame from the original and the rescued file, then:
+python -m maxrescue.app.cli verify before.exr after.exr
+```
+
+Automatic stages must come back **bit-identical**. Anything else is a bug in a
+stage, not a tolerance to widen.
+
+## Step 3 — the four open questions
 
 These I cannot answer from here and they change the plan:
 
@@ -89,12 +124,30 @@ These I cannot answer from here and they change the plan:
 
 ---
 
+## What is staged versus what is proven
+
+Everything in `maxbridge/` and `scripts/` has **never executed**. It is checked
+statically — it parses, its imports resolve, it implements every port the core
+calls, and it avoids the specific traps in `docs/gotchas.md` — but static checks
+cannot catch a wrong enum value or a property that does not exist on this build.
+
+Expect the first run to surface a few of those. The spikes dump
+`showProperties` output precisely so the real names end up in the report rather
+than in a guess. Send me `spike_report.json` and `rescue_report.json` and I can
+fix them against real error messages instead of speculating.
+
+The pure engine — X-ray, planner guards, governor, session and batch
+choreography — has 424 tests behind it and does not depend on any of that.
+
 ## What happens next
 
-- **S1 returns `MERGE_SELECTIVE`** → I build Phase 3 (merge primitives, batch
-  loop) against real API behaviour, then the reduction stages.
-- **S1 returns `MERGE_FULL`** → we revise the plan first. The 256 GB in-session
-  path still gets you a lightened file; it just does not remove the big-box
-  dependency, and I would say so plainly rather than build around it.
+- **S1 returns `MERGE_SELECTIVE`** → the batch design holds; go straight on to
+  step 2 and run the rescue.
+- **S1 returns `MERGE_FULL`** → batching cannot bound peak RAM. Stop. The
+  in-session path on the 256 GB box still produces a lightened file (the whole
+  reduction engine works unchanged on an already-open scene), but it does not
+  remove the big-box dependency, and I would say so plainly rather than build
+  around it.
 
-Either way the X-ray and the governor stand — neither depends on the answer.
+Either way the X-ray, the planner guards and the governor stand — none of them
+depend on the answer.
