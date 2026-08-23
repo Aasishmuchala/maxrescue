@@ -27,6 +27,23 @@ def _script_files() -> list[pathlib.Path]:
     return sorted(SCRIPTS.glob("*.py"))
 
 
+def _on_box_scripts() -> list[pathlib.Path]:
+    """Only the scripts a `.ms` wrapper actually launches inside Max.
+
+    Derived from the wrappers rather than assumed from the directory, so a dev
+    tool like `ui_proof.py` living alongside them is not held to rules about
+    pymxs it has no business following — and a new on-box script is covered the
+    moment its wrapper points at it.
+    """
+    referenced: set[str] = set()
+    for wrapper in SCRIPTS.rglob("*.ms"):
+        text = wrapper.read_text(encoding="utf-8")
+        for candidate in _script_files():
+            if candidate.name in text:
+                referenced.add(candidate.name)
+    return [p for p in _script_files() if p.name in referenced]
+
+
 def _tree(path: pathlib.Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
@@ -88,10 +105,15 @@ def test_first_party_imports_resolve(path: pathlib.Path):
     assert not missing, f"{path.name} imports names that do not exist: {missing}"
 
 
-@pytest.mark.parametrize("path", _script_files(), ids=lambda p: p.name)
+def test_every_on_box_script_is_reachable_from_a_wrapper():
+    """A script no `.ms` launches will never run, however correct it is."""
+    assert _on_box_scripts(), "no on-box scripts are referenced by any .ms wrapper"
+
+
+@pytest.mark.parametrize("path", _on_box_scripts(), ids=lambda p: p.name)
 def test_on_box_script_imports_pymxs(path: pathlib.Path):
-    """These scripts are only meaningful inside Max. One that never touches
-    pymxs is either dead or in the wrong directory."""
+    """These run inside Max. One that never touches pymxs is either dead or in
+    the wrong directory."""
     assert "pymxs" in path.read_text(encoding="utf-8"), (
         f"{path.name} never imports pymxs — is it really an on-box script?"
     )
@@ -118,7 +140,7 @@ def test_no_stdout_stream_handler(path: pathlib.Path):
     )
 
 
-@pytest.mark.parametrize("path", _script_files(), ids=lambda p: p.name)
+@pytest.mark.parametrize("path", _on_box_scripts(), ids=lambda p: p.name)
 def test_work_is_not_hidden_behind_an_import_guard(path: pathlib.Path):
     """If the entry work sits inside `try: import pymxs / except: print(...)`,
     a real failure is reported as 'not running inside Max' and the session is
