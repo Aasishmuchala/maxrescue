@@ -23,6 +23,7 @@ Pipeline: 3ds Max 2026 · V-Ray 7 · Chaos Vantage 3.3.1.
 | `xray` | no | What is in this file, and why won't it open? |
 | `plan` | no | What batches would a rescue use? |
 | `rescue` | **yes** | Rebuild the scene in batches and write a new file |
+| `reference` | **yes** | Render a before-frame, on a machine where the scene opens |
 | `verify` | no | Are two rendered frames identical? |
 
 ```bash
@@ -133,7 +134,7 @@ python3 -m venv .venv && ./.venv/bin/python -m pip install -e ".[dev]"
 ./.venv/bin/python -m pytest
 ```
 
-424 tests, under a second, on macOS with no 3ds Max anywhere.
+ tests, a few seconds, on macOS with no 3ds Max anywhere.
 
 `xray/` and `core/` are pure — no `pymxs`, no Qt — and a test enforces it in both
 directions. `maxbridge/` is the only place Max may exist.
