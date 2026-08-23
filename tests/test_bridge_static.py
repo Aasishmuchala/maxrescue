@@ -419,3 +419,45 @@ def test_a_build_exposing_no_proxy_properties_says_so():
     # so a contiguous match would fail on formatting alone.
     assert "no render-affecting proxy properties were exposed" in source
     assert "confirmed neutral" in source
+
+
+# ---------------------------------------------------------------------------
+# the boundary-crossing rule, enforced
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", _bridge_modules(), ids=lambda p: p.name)
+def test_no_bridge_module_iterates_the_scene_from_python(path: pathlib.Path):
+    """Per-node pymxs access is ~10x a single bulk crossing. The guard walks the
+    scene twice per session and a session runs per batch, so on a 50k-object
+    scene across 50 batches that is five million crossings — the exact shape
+    that stalled a sibling project for nine minutes."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    offenders = [
+        node.iter.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.For)
+        and isinstance(node.iter, ast.Attribute)
+        and isinstance(node.iter.value, ast.Name)
+        and node.iter.value.id == "rt"
+        and node.iter.attr in ("objects", "geometry", "shapes", "lights", "cameras")
+    ]
+    assert not offenders, (
+        f"{path.name} iterates rt.{offenders} from Python — use a bulk "
+        "MAXScript helper in maxscript.py instead"
+    )
+
+
+def test_undo_records_when_it_cannot_actually_roll_back():
+    """A hold already open means no rollback. Doing that silently leaves a
+    failed operation half-applied while the caller believes it was undone."""
+    source = (BRIDGE / "undo.py").read_text(encoding="utf-8")
+    assert "notes" in source
+    assert "would not be rolled back" in source
+
+
+def test_vram_records_whether_it_measured_the_process_or_the_whole_card():
+    """A Vantage session on the same GPU would otherwise be attributed to Max."""
+    source = (BRIDGE / "memory.py").read_text(encoding="utf-8")
+    assert "whole-gpu" in source
+    assert "nvidia-smi/process" in source

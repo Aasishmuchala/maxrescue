@@ -381,6 +381,14 @@ class BatchReport:
     @property
     def peak_rss_mb(self) -> float:
         """The high-water mark, which is what decides whether the machine
-        survives — not the tidy figure at the end."""
-        samples = [s.rss_mb for s in (self.memory_after_merge, self.memory_after) if s]
+        survives — not the tidy figure at the end.
+
+        Zero means NOT MEASURED. Callers must say so rather than printing
+        "peak 0 MB", which reads as a measurement of nothing rather than as an
+        absence of measurement.
+        """
+        samples = [
+            s.rss_mb for s in (self.memory_after_merge, self.memory_after)
+            if s and s.rss_mb > 0
+        ]
         return max(samples) if samples else 0.0

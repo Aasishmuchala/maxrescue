@@ -139,12 +139,13 @@ class MaxFixServices:
         is 0-based while `deleteItem`'s argument is 1-based, which is a
         delightful way to delete the wrong one.
         """
+        # The used-set in ONE crossing rather than one per node.
         used: set[int] = set()
         try:
-            for node in rt.objects:
-                material = getattr(node, "material", None)
-                if material is not None:
-                    used.add(int(rt.getHandleByAnim(material)))
+            from maxrescue.maxbridge.maxscript import compile_helpers
+
+            compile_helpers(rt)
+            used = {int(h) for h in (rt.mrUsedMaterialHandles() or [])}
         except Exception:
             return 0
 

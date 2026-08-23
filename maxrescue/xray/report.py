@@ -361,17 +361,16 @@ def xray(path: str) -> XrayReport:
         )
         catalog = ClassCatalog(dlls=dlls, classes=classes)
 
-        inventory = (
-            walk_scene(mf.open_reader("Scene"), catalog)
-            if mf.has("Scene")
-            else SceneInventory(objects=(), stream_size=0)
-        )
-
-        nodes = (
-            build_node_graph(mf.open_reader("Scene"), catalog, inventory)
-            if mf.has("Scene")
-            else NodeGraph(nodes=())
-        )
+        # ONE reader for both passes. `ChunkReader` seeks rather than
+        # consuming, so it is reusable — and opening twice would inflate a
+        # compressed Scene stream twice, at gigabyte scale.
+        if mf.has("Scene"):
+            reader = mf.open_reader("Scene")
+            inventory = walk_scene(reader, catalog)
+            nodes = build_node_graph(reader, catalog, inventory)
+        else:
+            inventory = SceneInventory(objects=(), stream_size=0)
+            nodes = NodeGraph(nodes=())
 
         targets = [s.name for s in mf.streams if s.name.lower() in _SCRIPT_BEARING]
         findings = tuple(scan_max_file(mf, targets))

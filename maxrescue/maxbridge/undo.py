@@ -27,6 +27,18 @@ class MaxUndoTransaction:
 
 
 class MaxUndoService:
+    """Transactions over `theHold`.
+
+    When a hold is ALREADY open — another tool, or a nested call — this cannot
+    start its own, and therefore cannot roll back. Previously it silently did
+    nothing in that case, so a failing operation stayed half-applied while the
+    caller believed it had been undone. Now it records the fact, and the run
+    report carries it.
+    """
+
+    def __init__(self) -> None:
+        self.notes: list[str] = []
+
     @contextmanager
     def transaction(self, label: str):
         began = False
@@ -34,8 +46,18 @@ class MaxUndoService:
             if not rt.theHold.Holding():
                 rt.theHold.Begin()
                 began = True
-        except Exception:
+        except Exception as exc:
             began = False
+            self.notes.append(f"could not begin an undo transaction: {exc}")
+
+        if not began:
+            # Not a warning to swallow: without a hold of our own, a failure
+            # inside this block will NOT be rolled back.
+            self.notes.append(
+                f"'{label}' ran without its own undo transaction — a hold was "
+                "already open, so a failure here would not be rolled back. The "
+                "backup file is the only recovery."
+            )
 
         txn = MaxUndoTransaction()
         try:

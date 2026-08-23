@@ -201,6 +201,37 @@ fn mrSceneTotals = (
     #(polys, verts, geo, objects.count, sceneMaterials.count)
 )
 
+fn mrMaterialAssignments = (
+    -- Every node handle with its material handle, in ONE crossing.
+    -- The guard walks this twice per session and a session runs per batch, so
+    -- doing it with per-node pymxs access on a 50k-object scene across 50
+    -- batches is five million crossings.
+    local rows = #()
+    for n in objects do
+    (
+        try
+        (
+            local h = getHandleByAnim n
+            local m = 0
+            try (if n.material != undefined do m = getHandleByAnim n.material) catch ()
+            append rows #(h, m)
+        )
+        catch ()
+    )
+    rows
+)
+
+fn mrUsedMaterialHandles = (
+    -- Handles of materials something actually references. Usage, never library
+    -- membership: sceneMaterials keeps a material after it is unassigned.
+    local out = #()
+    for n in objects do
+    (
+        try (if n.material != undefined do appendIfUnique out (getHandleByAnim n.material)) catch ()
+    )
+    out
+)
+
 fn mrSceneStates = (
     local out = #()
     try (

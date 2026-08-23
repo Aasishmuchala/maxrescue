@@ -162,3 +162,59 @@ def test_streaming_respects_the_declared_size():
     data = b"." * 100 + b"CRP_BScript"
     found = scan_stream(io.BytesIO(data), "Scene", 100, window=64)
     assert found == []
+
+
+# --------------------------------------------------------------------------
+# which patterns are looked for where
+# --------------------------------------------------------------------------
+
+
+def test_the_scene_stream_is_scanned_for_named_payloads_only(tmp_path):
+    """`Scene` can be gigabytes. An unsafe-command token there would be noise
+    even if it were free — a four-letter sequence somewhere in six billion bytes
+    of geometry says nothing. Named payload families still get found."""
+    from maxrescue.xray.ole import MaxFile
+    from maxrescue.xray.signatures import scan_max_file
+    from tests.helpers_ole import build_ole, pad_chunks
+
+    payload = b"harmless " + b"fopen deleteFile registry.stuff " * 40 + b"CRP_BScript"
+    blob = build_ole({"Scene": pad_chunks(payload)})
+    with MaxFile.from_bytes(blob) as mf:
+        findings = scan_max_file(mf, ["Scene"])
+
+    names = {f.signature for f in findings}
+    assert "CRP_BScript" in names, "a named payload must still be found"
+    assert "fopen" not in names
+    assert "registry." not in names
+
+
+def test_script_definition_streams_are_scanned_for_everything(tmp_path):
+    """These are small, and a token like `fopen` is only interpretable inside a
+    script body — which is exactly what they hold."""
+    from maxrescue.xray.ole import MaxFile
+    from maxrescue.xray.signatures import scan_max_file
+    from tests.helpers_ole import build_ole, pad_chunks
+
+    blob = build_ole(
+        {"ScriptedCustAttribDefs": pad_chunks(b"local f = fopen something")}
+    )
+    with MaxFile.from_bytes(blob) as mf:
+        findings = scan_max_file(mf, ["ScriptedCustAttribDefs"])
+    assert "fopen" in {f.signature for f in findings}
+
+
+def test_narrowing_the_pattern_set_is_measurably_cheaper():
+    """The reason the split is worth having at all."""
+    import time
+
+    data = b"ordinary scene data with names and paths " * 60_000
+
+    started = time.time()
+    scan_bytes(data, "Scene")
+    everything = time.time() - started
+
+    started = time.time()
+    scan_bytes(data, "Scene", (Severity.MALWARE,))
+    malware_only = time.time() - started
+
+    assert malware_only < everything

@@ -273,8 +273,12 @@ def hidden_reason(
     if node.in_group or node.is_group_head:
         return "in a group"
     if node.base_handle is not None and node.base_handle in visible_bases:
-        # Deleting the master of an instance set takes the geometry with it.
-        return "shares its base object with a visible node (instance master)"
+        # NOT because deleting it would take the geometry — Max reference
+        # counting keeps a base object alive while any node still points at it.
+        # The reason is narrower and still sufficient: this node is entangled
+        # with visible ones, and an instance set is exactly where a plugin or a
+        # group-select takes siblings with it. Deliberately over-conservative.
+        return "shares its base object with a visible node — entangled with an instance set"
     if node.is_bone or node.has_skin:
         return "part of a rig"
     return None
@@ -294,6 +298,10 @@ def collapse_reason(node: NodeFacts, config: PlanConfig) -> str | None:
         return "animated — collapsing bakes one frame"
     if node.scripted_controller:
         return "script-driven controller"
+    if node.in_group or node.is_group_head:
+        # Same reasoning as the proxy guard: a closed group turns an operation
+        # on one member into an operation on all of them.
+        return "in a group — an operation on one member reaches the whole group"
 
     for modifier in node.modifier_classes:
         name = _norm(modifier)

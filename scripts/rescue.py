@@ -3,9 +3,11 @@
 Rebuilds a scene in batches under a memory governor, reducing each batch while
 only that batch is resident, and writes a new file. The source is never touched.
 
-Reports to a result file, not stdout: `3dsmaxbatch` exit codes are unreliable,
-and a `logging.StreamHandler` on stdout is by itself enough to make Max return
-exit -130.
+The VERDICT is a result file, never stdout — `3dsmaxbatch` exit codes and stdout
+are not reliable indicators of what the script found. Progress is still printed,
+because that is how it reaches the listener log, but every write is guarded: a
+`logging.StreamHandler` on stdout is by itself enough to make Max return exit
+-130, and a print that raises must not be what ends a four-hour rescue.
 
 Environment:
     MAXRESCUE_REPO      repo root (added to sys.path)
@@ -58,7 +60,7 @@ if REPO and REPO not in sys.path:
 import pymxs  # noqa: E402  — available only inside Max, by design
 
 from maxrescue.core.batch import BatchRunner  # noqa: E402
-from maxrescue.core.governor import Governor, MergeCandidate  # noqa: E402
+from maxrescue.core.governor import Governor, candidates_from  # noqa: E402
 from maxrescue.maxbridge.context import build_context  # noqa: E402
 from maxrescue.core.verify import Tolerance, compare  # noqa: E402
 from maxrescue.xray.report import xray  # noqa: E402
@@ -70,8 +72,13 @@ report: dict = {"log": [], "batches": []}
 
 
 def log(message: str) -> None:
-    print("[maxrescue] %s" % message)
     report["log"].append(message)
+    # Guarded: the listener is the reason to print, but a stdout that raises
+    # must not be what ends the run. The report file is the durable record.
+    try:
+        print("[maxrescue] %s" % message)
+    except Exception:
+        pass
 
 
 def flush() -> None:
@@ -80,7 +87,10 @@ def flush() -> None:
         with open(REPORT_PATH, "w") as handle:
             json.dump(report, handle, indent=2, default=str)
     except Exception as exc:
-        print("[maxrescue] could not write report: %s" % exc)
+        try:
+            print("[maxrescue] could not write report: %s" % exc)
+        except Exception:
+            pass
 
 
 def write_result(text: str) -> None:
@@ -90,7 +100,10 @@ def write_result(text: str) -> None:
         with open(RESULT, "w") as handle:
             handle.write(text)
     except Exception as exc:
-        print("[maxrescue] could not write result: %s" % exc)
+        try:
+            print("[maxrescue] could not write result: %s" % exc)
+        except Exception:
+            pass
 
 
 def main() -> str:
@@ -145,16 +158,9 @@ def main() -> str:
         return "RESCUE_REFUSED known payload signature present — clean the file first"
     flush()
 
-    candidates = [
-        MergeCandidate(
-            name=node.name,
-            weight=node.bytes + node.object_bytes,
-            position=node.position,
-            parent_position=node.parent_position,
-        )
-        for node in survey.nodes.nodes
-        if node.name
-    ]
+    # The SAME construction `maxrescue plan` uses. Two implementations would
+    # drift, and `plan` would quietly stop predicting what `rescue` does.
+    candidates = candidates_from(survey.nodes.nodes)
     if not candidates:
         return "RESCUE_FAIL the x-ray resolved no named nodes to merge"
     log("%d named node(s) eligible to merge" % len(candidates))

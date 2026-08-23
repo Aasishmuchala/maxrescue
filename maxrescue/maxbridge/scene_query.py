@@ -247,20 +247,15 @@ class MaxSceneQuery:
         `sceneMaterials` still contains a material after it is unassigned, so
         membership is not liveness and a verify built on it halts good runs.
 
-        COST: this walks every object, so it is O(n) per call. Never call it in
-        a loop over materials — that is O(n*m) and will look like a hang.
-        `purge_unused_materials` builds the used-set once instead.
+        One MAXScript crossing rather than one per node. Still O(n) inside Max,
+        so calling it in a loop over materials is O(n·m) — build the used-set
+        once instead, as `purge_unused_materials` does.
         """
+        self._ensure_compiled()
         try:
-            for node in rt.objects:
-                material = getattr(node, "material", None)
-                if material is None:
-                    continue
-                if int(rt.getHandleByAnim(material)) == int(handle):
-                    return True
+            return int(handle) in {int(h) for h in (rt.mrUsedMaterialHandles() or [])}
         except Exception:
             return False
-        return False
 
     # -- scene-level -------------------------------------------------------
 

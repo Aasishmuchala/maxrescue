@@ -328,3 +328,10 @@ def test_stage_ordering_does_not_destroy_within_stage_ordering():
                if op.stage is Stage.PROXY]
     faces = [op.payload["faces"] for op in proxies]
     assert faces == sorted(faces, reverse=True)
+
+
+def test_collapse_refuses_a_group_member():
+    """A closed group turns an operation on one member into an operation on all
+    of them — the same production incident the proxy guard exists for."""
+    reason = collapse_reason(node(modifier_classes=("Bend",), in_group=True), CONFIG)
+    assert reason is not None and "group" in reason.lower()

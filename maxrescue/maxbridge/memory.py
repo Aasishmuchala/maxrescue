@@ -95,8 +95,13 @@ def _ctypes_rss():
         return None
 
 
-def _vram_mb():
-    """VRAM for this process. Absent GPU degrades to None, never raises."""
+def _vram_mb() -> tuple[float | None, str]:
+    """VRAM, and WHERE the figure came from.
+
+    The per-process figure and the whole-card figure are very different claims —
+    a Vantage session on the same box would otherwise be attributed to Max — so
+    the source travels with the number instead of both landing in one field.
+    """
     try:
         out = subprocess.check_output(
             ["nvidia-smi", "--query-compute-apps=pid,used_memory",
@@ -107,7 +112,7 @@ def _vram_mb():
         for row in out.strip().splitlines():
             parts = [p.strip() for p in row.split(",")]
             if len(parts) >= 2 and parts[0] == pid:
-                return float(parts[1])
+                return float(parts[1]), "nvidia-smi/process"
     except Exception:
         pass
     try:
@@ -116,20 +121,22 @@ def _vram_mb():
              "--format=csv,noheader,nounits"],
             stderr=subprocess.STDOUT, timeout=10,
         ).decode("utf-8", "replace")
-        return float(out.strip().splitlines()[0])
+        # Whole card, not this process. Labelled so, because anything else
+        # running on the GPU is included.
+        return float(out.strip().splitlines()[0]), "nvidia-smi/whole-gpu"
     except Exception:
-        return None
+        return None, "unavailable"
 
 
 class MaxMemoryProbe:
     def sample(self) -> MemorySample:
-        vram = _vram_mb()
+        vram, vram_source = _vram_mb()
 
         values = _psutil_rss()
         if values:
             return MemorySample(
                 rss_mb=round(values[0], 1), peak_rss_mb=round(values[1], 1),
-                vram_mb=vram, source="psutil",
+                vram_mb=vram, source=f"psutil · vram:{vram_source}",
             )
 
         values = _max_memory()
@@ -137,19 +144,21 @@ class MaxMemoryProbe:
             return MemorySample(
                 rss_mb=round(values[0], 1), peak_rss_mb=round(values[1], 1),
                 pagefile_mb=round(values[2], 1), vram_mb=vram,
-                source="sysinfo.getMAXMemoryInfo",
+                source=f"sysinfo.getMAXMemoryInfo · vram:{vram_source}",
             )
 
         values = _ctypes_rss()
         if values:
             return MemorySample(
                 rss_mb=round(values[0], 1), peak_rss_mb=round(values[1], 1),
-                vram_mb=vram, source="GetProcessMemoryInfo",
+                vram_mb=vram, source=f"GetProcessMemoryInfo · vram:{vram_source}",
             )
 
         # Zero with an explicit source, so the report falls back to polygons
         # rather than printing a confident 0%.
-        return MemorySample(rss_mb=0.0, vram_mb=vram, source="unavailable")
+        return MemorySample(
+            rss_mb=0.0, vram_mb=vram, source=f"unavailable · vram:{vram_source}"
+        )
 
     def settle(self) -> None:
         for call in (lambda: rt.gc(light=False), rt.gc):
