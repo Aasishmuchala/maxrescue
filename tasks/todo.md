@@ -33,7 +33,7 @@ bit-identical, on a 128 GB / 32 GB-VRAM box. Max 2026 · V-Ray 7 · Vantage 3.3.
 
 - [x] **T6** chunk reader — 24 tests (headers, wide escape, nesting, malformed-raises-not-hangs, streaming O(1)). **OLE2 wrapper (`ole.py`) still to do**
 - [x] **T7** `DllDirectory` + `ClassDirectory3` join, ClassID collision fix, **and** the signature scanner (malware vs suspicious separated; streaming with overlap so boundary-straddling matches are found). Missing-plugin *report* lands with T10
-- [ ] **T8** T2 shallow scene walk → per-object class + byte weight histogram; `0x2032`/`0x2033` DerivedObject exceptions
+- [x] **T8** shallow scene walk — 18 tests; per-object class+weight from headers alone, histogram, heaviest-N, geometry split, DerivedObject special-casing, degrades on damage instead of raising
 - [ ] **T9** T3 node graph (names `0x0962`, refs `0x2034`/`0x2035`, modifier stacks) — **degrades to T2 on unknowns, never raises**
 - [ ] **T10** `maxrescue xray <file>` → JSON + HTML report, verdict, degradation rate
 

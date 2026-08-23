@@ -237,3 +237,26 @@ def test_chunk_is_immutable():
     assert isinstance(chunk, Chunk)
     with pytest.raises(Exception):
         chunk.ident = 2  # type: ignore[misc]
+
+
+def test_streaming_children_reads_headers_not_the_container_payload():
+    """The Scene stream wraps every object in one outer container, so loading a
+    container's payload to enumerate its children would mean loading the whole
+    scene."""
+    kids = b"".join(leaf(i, b"P" * 50_000) for i in range(1, 6))
+    buf = container(0x2012, kids)
+    stream = CountingStream(buf)
+    reader = ChunkReader(stream, len(buf))
+
+    (outer,) = list(reader.iter_top_level())
+    idents = [c.ident for c in reader.iter_children(outer)]
+
+    assert idents == [1, 2, 3, 4, 5]
+    assert stream.bytes_read < 1024  # six headers, not 250 KB
+
+
+def test_iter_range_is_bounded_by_its_end():
+    buf = leaf(1, b"a" * 10) + leaf(2, b"b" * 10)
+    reader = ChunkReader(io.BytesIO(buf), len(buf))
+    assert [c.ident for c in reader.iter_range(0, 16)] == [1]
+    assert [c.ident for c in reader.iter_range(16, 32)] == [2]

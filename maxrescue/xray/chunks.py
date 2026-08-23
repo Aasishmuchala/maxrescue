@@ -177,20 +177,28 @@ class ChunkReader:
     def size(self) -> int:
         return self._size
 
-    def iter_top_level(self) -> Iterator[Chunk]:
-        """Yield every top-level chunk, seeking past each payload."""
-        pos = 0
-        while pos < self._size:
+    def iter_range(self, start: int, end: int) -> Iterator[Chunk]:
+        """Yield the chunks between two absolute stream offsets, headers only.
+
+        Never reads a payload. Everything else here is built on this, which is
+        what keeps a walk over a multi-gigabyte stream cheap.
+        """
+        pos = start
+        while pos < end:
             self._stream.seek(pos)
             chunk = _decode_header(self._stream.read(_WIDE_HEADER), pos)
-            if chunk.end > self._size:
+            if chunk.end > end:
                 raise ChunkError(
-                    f"chunk 0x{chunk.ident:04X} overruns the stream "
-                    f"({chunk.end} > {self._size})",
+                    f"chunk 0x{chunk.ident:04X} overruns its container "
+                    f"({chunk.end} > {end})",
                     pos,
                 )
             yield chunk
             pos = chunk.end
+
+    def iter_top_level(self) -> Iterator[Chunk]:
+        """Yield every top-level chunk, seeking past each payload."""
+        yield from self.iter_range(0, self._size)
 
     def read_payload(self, chunk: Chunk) -> bytes:
         """Fetch one chunk's payload. The only place bytes are materialised."""
@@ -200,19 +208,11 @@ class ChunkReader:
     def iter_children(self, chunk: Chunk) -> Iterator[Chunk]:
         """Yield the children of one container, in absolute stream coordinates.
 
-        Loads only that container's payload. Use :meth:`read_payload` on the
-        results rather than ``Chunk.payload``, since their offsets are
-        stream-relative, not buffer-relative.
+        Headers only — the `Scene` stream wraps every object in a single outer
+        container, so materialising a container's payload here would mean
+        loading the entire scene. Use :meth:`read_payload` on the results rather
+        than ``Chunk.payload``, since their offsets are stream-relative.
         """
         if not chunk.is_container:
             return
-        body = self.read_payload(chunk)
-        base = chunk.payload_start
-        for child in iter_chunks(body):
-            yield Chunk(
-                ident=child.ident,
-                is_container=child.is_container,
-                start=base + child.start,
-                header_size=child.header_size,
-                total_size=child.total_size,
-            )
+        yield from self.iter_range(chunk.payload_start, chunk.end)
