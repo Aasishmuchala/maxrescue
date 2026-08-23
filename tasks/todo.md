@@ -31,8 +31,8 @@ bit-identical, on a 128 GB / 32 GB-VRAM box. Max 2026 · V-Ray 7 · Vantage 3.3.
 
 ## P1 — X-ray (pure Python, no Max — parallelisable with P0)
 
-- [ ] **T6** OLE2 + chunk reader (6-byte header, bit-31 container, `size==0` → 14-byte/uint64 escape, gzip streams)
-- [ ] **T7** `DllDirectory` + `ClassDirectory3` join; DllIndex −1 built-in / **−2 scripted**; missing plugins; malware signatures (UTF-16LE **and** ASCII)
+- [x] **T6** chunk reader — 24 tests (headers, wide escape, nesting, malformed-raises-not-hangs, streaming O(1)). **OLE2 wrapper (`ole.py`) still to do**
+- [~] **T7** `DllDirectory` + `ClassDirectory3` join **done** (35 tests; positional alignment preserved on malformed entries; ClassID collision bug fixed). **Still to do:** malware signatures (UTF-16LE **and** ASCII), missing-plugin report
 - [ ] **T8** T2 shallow scene walk → per-object class + byte weight histogram; `0x2032`/`0x2033` DerivedObject exceptions
 - [ ] **T9** T3 node graph (names `0x0962`, refs `0x2034`/`0x2035`, modifier stacks) — **degrades to T2 on unknowns, never raises**
 - [ ] **T10** `maxrescue xray <file>` → JSON + HTML report, verdict, degradation rate
