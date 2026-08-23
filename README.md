@@ -51,6 +51,29 @@ Exit codes: `0` fine · `2` unreadable · `3` known payload signature.
 
 ---
 
+## Will it look different?
+
+**No — and [docs/quality.md](docs/quality.md) is the argument, with the way to
+check it rather than take my word.**
+
+The short version: a `.vrmesh` stores *"everything that is needed to render the
+mesh"* — topology, UVs, material IDs, smoothing groups, normals. Nothing is
+decimated. A proxy is cheap because the geometry lives on **disk between
+renders** instead of in RAM; at render time the full mesh streams back at full
+resolution. Setting a proxy's display to bounding box is a **viewport** setting
+and the renderer never consults it.
+
+To prove it rather than argue it, render a reference on the machine where the
+scene still opens, then let the rescue render the result and compare:
+
+```powershell
+pwsh scripts\run_reference.ps1 -Target "villa.max" -Camera "Cam_Hero"
+# then rescue with MAXRESCUE_REFERENCE set — it verifies automatically
+```
+
+The comparison is **bit-exact**. `RESCUE_VERIFIED` means identical; anything
+else is a bug in a stage, not a tolerance to widen.
+
 ## The contract
 
 **Renders are bit-identical.** Eight reduction stages run automatically, and

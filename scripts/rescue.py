@@ -15,6 +15,14 @@ Environment:
     MAXRESCUE_OUT       directory for the JSON report
     MAXRESCUE_CEILING_GB     resident-memory ceiling (default 70)
     MAXRESCUE_CONVERT_BITMAPS  set to 1 to enable the NON-identical bitmap stage
+    MAXRESCUE_REFERENCE   a reference EXR from scripts/reference.py. When set,
+                          the rescued scene is rendered with the same settings
+                          and compared PIXEL FOR PIXEL against it.
+    MAXRESCUE_LIGHTCACHE  the light cache the reference used — both renders must
+                          load the same one or they differ for reasons that have
+                          nothing to do with the rescue
+    MAXRESCUE_CAMERA / MAXRESCUE_WIDTH / MAXRESCUE_HEIGHT
+                          must match whatever the reference used
 """
 
 from __future__ import annotations
@@ -34,6 +42,11 @@ CEILING_GB = float(os.environ.get("MAXRESCUE_CEILING_GB", "70") or 70)
 CONVERT_BITMAPS = os.environ.get("MAXRESCUE_CONVERT_BITMAPS", "").lower() in (
     "1", "true", "yes"
 )
+REFERENCE = os.environ.get("MAXRESCUE_REFERENCE", "")
+LIGHTCACHE = os.environ.get("MAXRESCUE_LIGHTCACHE", "")
+CAMERA = os.environ.get("MAXRESCUE_CAMERA", "")
+WIDTH = int(os.environ.get("MAXRESCUE_WIDTH", "1280") or 1280)
+HEIGHT = int(os.environ.get("MAXRESCUE_HEIGHT", "720") or 720)
 
 if REPO and REPO not in sys.path:
     sys.path.insert(0, REPO)
@@ -43,6 +56,7 @@ import pymxs  # noqa: E402  — available only inside Max, by design
 from maxrescue.core.batch import BatchRunner  # noqa: E402
 from maxrescue.core.governor import Governor, MergeCandidate  # noqa: E402
 from maxrescue.maxbridge.context import build_context  # noqa: E402
+from maxrescue.core.verify import Tolerance, compare  # noqa: E402
 from maxrescue.xray.report import xray  # noqa: E402
 from maxrescue.app.settings import Settings  # noqa: E402
 
@@ -189,6 +203,21 @@ def main() -> str:
         return "RESCUE_HALTED merged=%d/%d output=%s" % (
             outcome.merged, outcome.requested, output,
         )
+
+    # --- the proof, if a reference was supplied
+    if REFERENCE and os.path.isfile(REFERENCE):
+        verdict = verify_against_reference(context, output)
+        report["verification"] = verdict
+        flush()
+        if not verdict.get("passed"):
+            return "RESCUE_DIFFERENT the rescued scene does NOT render identically: %s" % (
+                verdict.get("summary"),
+            )
+        return "RESCUE_VERIFIED renders are identical · merged=%d output=%s" % (
+            outcome.merged, output,
+        )
+    if REFERENCE:
+        log("! MAXRESCUE_REFERENCE was set but %s does not exist — NOT verified" % REFERENCE)
     if not outcome.complete:
         return "RESCUE_PARTIAL merged=%d/%d output=%s" % (
             outcome.merged, outcome.requested, output,
@@ -196,6 +225,56 @@ def main() -> str:
     return "RESCUE_OK merged=%d peak=%.0fMB output=%s in %.0fs" % (
         outcome.merged, outcome.peak_rss_mb, output, time.time() - started,
     )
+
+
+def verify_against_reference(context, output: str) -> dict:
+    """Render the rescued scene and compare it with the reference.
+
+    The rescued scene is already open, so this renders what was actually
+    produced — not a re-import of it. Same camera, same resolution, same light
+    cache, same seed. Anything less and a difference cannot be attributed.
+    """
+    produced = os.path.join(OUT_DIR, "rescued.exr")
+    log("rendering the rescued scene for comparison")
+
+    rt.renderWidth = WIDTH
+    rt.renderHeight = HEIGHT
+
+    camera = None
+    if CAMERA:
+        for candidate in rt.cameras or []:
+            if str(getattr(candidate, "name", "")) == CAMERA:
+                camera = candidate
+                break
+        if camera is None:
+            return {
+                "passed": False,
+                "summary": "camera %r is not in the rescued scene" % CAMERA,
+            }
+
+    saved = context.render.prepare_deterministic(light_cache_file=LIGHTCACHE or None)
+    try:
+        if camera is not None:
+            rt.viewport.setCamera(camera)
+        rendered = context.render.render_to(produced)
+    finally:
+        context.render.restore(saved)
+
+    if not rendered:
+        return {"passed": False, "summary": "the comparison render produced no file"}
+
+    # BIT-EXACT. Every automatic stage claims identity; a tolerance here would
+    # quietly accept the very drift this exists to catch.
+    result = compare(REFERENCE, produced, tolerance=Tolerance.bit_exact())
+    log(result.describe())
+    return {
+        "passed": result.passed,
+        "identical": result.identical,
+        "summary": result.summary,
+        "command": list(result.command),
+        "reference": REFERENCE,
+        "produced": produced,
+    }
 
 
 try:

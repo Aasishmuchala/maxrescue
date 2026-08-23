@@ -21,9 +21,37 @@ import pymxs
 
 rt = pymxs.runtime
 
-#: VRayProxy display modes. 0 is bounding box — anything heavier defeats the
-#: purpose, since the preview mesh then lives in RAM too.
+#: VRayProxy display modes. 0 is bounding box.
+#:
+#: This is VIEWPORT ONLY. Chaos: "VRayProxy imports a geometry from an external
+#: mesh at render time only. The geometry is not present in the scene, and does
+#: not use up any resources, EXCEPT FOR THE VIEWPORT PREVIEW." The renderer
+#: streams the full mesh from the .vrmesh regardless of what the viewport shows,
+#: so a bounding-box proxy renders at full quality.
 PROXY_DISPLAY_BOUNDING_BOX = 0
+
+#: Proxy properties that DO reach the renderer, with the value that means
+#: "unchanged". Everything else on a VRayProxy is viewport decoration; these are
+#: the ones that can silently alter the image.
+#:
+#: Names are marked unverified in the research, so each is checked only if the
+#: build actually exposes it — and what was checked is recorded either way.
+RENDER_AFFECTING_PROXY_DEFAULTS = {
+    # "0.0 means that no point cloud level is loaded and the original mesh is
+    # rendered instead" — a point-cloud level would render simplified geometry.
+    "point_cloud_on": False,
+    "pointcloud_on": False,
+    "point_cloud_level_multiplier": 0.0,
+    # "control the loaded vrmesh level for rendering" — render-affecting for
+    # multi-resolution meshes.
+    "lod_scale": 0.0,
+    "scale": 1.0,
+    # Y/Z swap, for meshes not exported from Max. Ours always are.
+    "flip_axis": False,
+    # Remaps UVs to a different channel; would change texture placement.
+    "first_map_channel_on": False,
+    "force_first_map_channel": False,
+}
 
 #: The ONLY render-identical bitmap mode. `#renderMode_UseProxies` renders the
 #: downscaled image and changes the result.
@@ -192,11 +220,25 @@ class MaxFixServices:
         created = rt.vrayMeshExport(
             meshFile=path,
             autoCreateProxies=True,
+            # Per-object: the mesh carries no transform and the proxy keeps the
+            # original's, pivot included.
             exportMultiple=True,
+            # Sub-materials reassigned to the right faces.
             createMultiMtl=True,
-            oneVoxelPerMesh=True,
+            # NEVER condense: it renumbers material IDs, and a Multi/Sub whose
+            # IDs have moved renders the wrong material on every face.
+            condenseMultiMtl=False,
+            # FALSE keeps V-Ray's chunked voxelisation, so it streams only the
+            # chunks a bucket needs. "Optimize for instancing" collapses the mesh
+            # to a single voxel, which loads the whole thing at render time —
+            # the opposite of what a memory tool wants. Purely a loading
+            # strategy; it does not change the geometry either way.
+            oneVoxelPerMesh=False,
+            # Viewport preview only. The renderer always streams the full mesh.
             maxPreviewFaces=1000,
+            # A point-cloud level would render simplified geometry.
             exportPointClouds=False,
+            animation=False,
         )
 
         if not os.path.exists(path):
@@ -223,8 +265,19 @@ class MaxFixServices:
                 "original is already gone; recover from the backup."
             )
 
-        # Bounding box display. Anything heavier keeps a preview mesh in RAM,
-        # and a modifier here reverts the proxy to a regular mesh entirely.
+        # Every property that reaches the renderer must be at its neutral
+        # value. The bounding-box display below is viewport-only; these are not.
+        drifted = self._render_affecting_drift(proxy)
+        if drifted:
+            raise RuntimeError(
+                f"{name}: the created proxy has render-affecting properties away "
+                f"from their neutral values ({drifted}), so it would not render "
+                "identically. The original is already gone; recover from the backup."
+            )
+
+        # Bounding box display. VIEWPORT ONLY — the renderer streams the full
+        # mesh from disk regardless. Anything heavier keeps a preview mesh in
+        # RAM, and a modifier here reverts the proxy to a regular mesh entirely.
         if not self._set_display(proxy, PROXY_DISPLAY_BOUNDING_BOX):
             raise RuntimeError(
                 f"{name}: converted, but the proxy display mode could not be set "
@@ -245,6 +298,45 @@ class MaxFixServices:
             self._set_display(self._node(handle), mode)
         except Exception as exc:
             self.notes.append(f"could not set proxy display on {handle}: {exc}")
+
+    def _render_affecting_drift(self, proxy) -> list[str]:
+        """Render-affecting proxy properties that are NOT at their neutral value.
+
+        Only properties this build actually exposes are checked — the names are
+        unverified in the research, and asserting on a name that does not exist
+        would fail every conversion. What was checked is recorded either way, so
+        a build that exposes none of them is visible rather than silently
+        assumed clean.
+        """
+        available = self._properties(proxy)
+        drifted: list[str] = []
+        checked: list[str] = []
+
+        for prop, neutral in RENDER_AFFECTING_PROXY_DEFAULTS.items():
+            if prop.lower() not in available:
+                continue
+            checked.append(prop)
+            try:
+                value = getattr(proxy, prop)
+            except Exception:
+                drifted.append(f"{prop}=<unreadable>")
+                continue
+            try:
+                if isinstance(neutral, bool):
+                    if bool(value) != neutral:
+                        drifted.append(f"{prop}={value!r}")
+                elif abs(float(value) - float(neutral)) > 1e-6:
+                    drifted.append(f"{prop}={value!r}")
+            except (TypeError, ValueError):
+                drifted.append(f"{prop}={value!r}")
+
+        if not checked:
+            self.notes.append(
+                "no render-affecting proxy properties were exposed by this build "
+                "— point cloud, LOD scale and map-channel settings could NOT be "
+                "confirmed neutral"
+            )
+        return drifted
 
     @staticmethod
     def _set_display(node, mode: int) -> bool:

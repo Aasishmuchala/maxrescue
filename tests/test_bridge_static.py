@@ -354,3 +354,68 @@ def test_messages_after_the_export_never_claim_the_original_survived():
     ]
     assert "left untouched" not in body
     assert "recover from the backup" in body
+
+
+# ---------------------------------------------------------------------------
+# proxy quality — "nothing should look any different"
+# ---------------------------------------------------------------------------
+
+
+def test_export_never_condenses_material_ids():
+    """condenseMultiMtl renumbers material IDs. A Multi/Sub whose IDs have moved
+    renders the wrong material on every face."""
+    tree = ast.parse((BRIDGE / "fix_services.py").read_text(encoding="utf-8"))
+    call = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "vrayMeshExport"
+    )
+    kwargs = {k.arg: k.value for k in call.keywords}
+    assert kwargs["condenseMultiMtl"].value is False
+    assert kwargs["createMultiMtl"].value is True, "sub-materials must follow faces"
+    assert kwargs["animation"].value is False
+
+
+def test_export_keeps_chunked_voxelisation():
+    """oneVoxelPerMesh collapses the mesh to a single voxel, so V-Ray loads the
+    whole thing at render time instead of streaming the chunks a bucket needs —
+    the opposite of what a memory tool wants."""
+    tree = ast.parse((BRIDGE / "fix_services.py").read_text(encoding="utf-8"))
+    call = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "vrayMeshExport"
+    )
+    kwargs = {k.arg: k.value for k in call.keywords}
+    assert kwargs["oneVoxelPerMesh"].value is False
+
+
+def test_every_render_affecting_proxy_property_is_asserted_neutral():
+    """Display mode is viewport-only, but point clouds, LOD scale, scale, axis
+    flip and map-channel remapping all reach the renderer."""
+    source = (BRIDGE / "fix_services.py").read_text(encoding="utf-8")
+    for prop in (
+        "point_cloud",
+        "lod_scale",
+        "scale",
+        "flip_axis",
+        "map_channel",
+    ):
+        assert prop in source, f"{prop} is render-affecting and is not checked"
+    assert "_render_affecting_drift" in source
+
+    body = source[source.index("def convert_to_proxy") : source.index("def set_proxy_display")]
+    assert "_render_affecting_drift" in body, (
+        "the check must run during conversion, not merely exist"
+    )
+
+
+def test_a_build_exposing_no_proxy_properties_says_so():
+    """Silence would mean 'confirmed neutral' when nothing was confirmed."""
+    source = (BRIDGE / "fix_services.py").read_text(encoding="utf-8")
+    # Phrases checked separately: the message is split across string literals,
+    # so a contiguous match would fail on formatting alone.
+    assert "no render-affecting proxy properties were exposed" in source
+    assert "confirmed neutral" in source

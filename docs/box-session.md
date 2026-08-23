@@ -72,6 +72,21 @@ leaves everything that already ran. Send the partial file.
 
 ---
 
+## Step 1.5 — the reference render (do this BEFORE the rescue)
+
+On the 256 GB box, while the scene still opens. The reference has to come from
+the original, and the original is the file that does not fit anywhere else.
+
+```powershell
+pwsh scripts\run_reference.ps1 -Target "D:\jobs\villa\villa.max" -Camera "Cam_Hero"
+```
+
+This is the only thing that turns "it should look the same" into "it does". It
+also saves the light cache both renders must share — without that, two renders
+of an unmodified scene differ and any comparison is meaningless.
+
+If you skip it, the rescue still runs; it just cannot prove anything.
+
 ## Step 2 — the rescue itself (the rest of the session)
 
 Only after S1 comes back `MERGE_SELECTIVE`. If it came back `MERGE_FULL`, stop
@@ -79,6 +94,9 @@ and send me the report — the architecture needs revising before this is worth
 running.
 
 ```powershell
+$env:MAXRESCUE_REFERENCE  = "…\verify-out\reference.exr"
+$env:MAXRESCUE_LIGHTCACHE = "…\verify-out\reference.vrlmap"
+$env:MAXRESCUE_CAMERA     = "Cam_Hero"
 pwsh scripts\run_rescue.ps1 -Target "D:\jobs\villa\villa.max" -CeilingGB 70
 ```
 
@@ -89,7 +107,11 @@ reduces → saves. The source file is never modified; output is
 
 Watch for:
 
-- **`RESCUE_OK`** in `rescue-out\_rescue_result.txt`, and the peak RSS in
+- **`RESCUE_VERIFIED`** — the rescued scene renders BIT-IDENTICALLY to the
+  reference. This is the result worth having.
+- **`RESCUE_DIFFERENT`** — it does not. A bug in a stage, not a tolerance to
+  widen; send me the report and both EXRs.
+- **`RESCUE_OK`** (no reference supplied) in `rescue-out\_rescue_result.txt`, and the peak RSS in
   `rescue_report.json`. Peak is what matters, not the final figure.
 - **`RESCUE_PARTIAL`** — some objects never merged. The report names every one.
 - **`RESCUE_HALTED`** — a reduction failed. Batches up to that point are saved;
