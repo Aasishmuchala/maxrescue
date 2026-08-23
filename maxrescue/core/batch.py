@@ -115,6 +115,13 @@ class BatchRunner:
         halted = False
         save_failed = False
 
+        # One bitmap sweep for the whole run. It opens every texture file to
+        # read real dimensions, so doing it per batch would dominate everything.
+        try:
+            self._textures = list(ctx.query.textures())
+        except Exception:
+            self._textures = []
+
         remaining = list(candidates)
         preview = self.governor.plan_all(remaining)
         log.append(self.governor.describe_plan(preview))
@@ -339,6 +346,7 @@ class BatchRunner:
             self.config,
             requires_backup=False,
             proxy_dir=self.proxy_dir,
+            textures=getattr(self, "_textures", None),
         )
         report = None
         for event in session.run_chunks():

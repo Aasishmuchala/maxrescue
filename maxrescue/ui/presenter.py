@@ -11,6 +11,7 @@ object is most of this scene, and here is its name*.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 
@@ -41,6 +42,19 @@ class Progress:
     message: str = ""
     resident_mb: float = 0.0
 
+    @property
+    def safe_fraction(self) -> float:
+        """Always between 0 and 1.
+
+        The raw value is derived from a report another process wrote, so it can
+        arrive negative, above one, or NaN — and NaN in particular reaches Qt as
+        `int(nan)`, which raises and takes the window down mid-run.
+        """
+        value = self.fraction
+        if value is None or math.isnan(value) or math.isinf(value):
+            return 0.0
+        return max(0.0, min(1.0, float(value)))
+
 
 @dataclass(frozen=True)
 class Outcome:
@@ -61,6 +75,10 @@ class Outcome:
 
     @property
     def shortfall(self) -> int:
+        """Objects asked for that never arrived.
+
+        Clamped at zero: more arriving than were requested is odd, but it is not
+        a loss, and "-5 object(s) never arrived" is nonsense on a screen."""
         return max(0, self.objects_requested - self.objects_merged)
 
 
@@ -185,7 +203,7 @@ def _running(state: AppState) -> ViewModel:
         # Starting again would merge everything a second time.
         can_rescue=False,
         rescue_label="Working…",
-        progress=progress.fraction,
+        progress=progress.safe_fraction,
     )
 
 

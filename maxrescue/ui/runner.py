@@ -180,6 +180,30 @@ def build_environment(request: RescueRequest, repo: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+def _as_int(value, default: int = 0) -> int:
+    """Coerce a report field, or give up quietly.
+
+    The JSON is written by a script running in another process, often on another
+    machine, and possibly while it was dying. One field arriving as "many"
+    should cost that number, not the whole result.
+    """
+    try:
+        result = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return result if result >= 0 else default
+
+
+def _as_float(value, default: float = 0.0) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if result != result or result in (float("inf"), float("-inf")):
+        return default
+    return result if result >= 0 else default
+
+
 def parse_result(verdict: str, report_path: str) -> Outcome:
     """Turn the result line and the JSON report into an :class:`Outcome`.
 
@@ -193,8 +217,15 @@ def parse_result(verdict: str, report_path: str) -> Outcome:
     except Exception:
         payload = {}
 
-    outcome_data = payload.get("outcome") or {}
+    outcome_data = payload.get("outcome")
+    if not isinstance(outcome_data, dict):
+        outcome_data = {}
     problems: list[str] = []
+
+    # Matched at the START of the line only. A line that merely mentions
+    # RESCUE_VERIFIED — "could not run the RESCUE_VERIFIED step" — is not a
+    # proof of identity.
+    verdict = (verdict or "").strip()
 
     verified: bool | None = None
     if verdict.startswith("RESCUE_VERIFIED"):
@@ -217,12 +248,12 @@ def parse_result(verdict: str, report_path: str) -> Outcome:
 
     return Outcome(
         output_path=str(outcome_data.get("output") or ""),
-        open_rss_mb=float(outcome_data.get("rss_end_mb") or 0),
-        peak_rss_mb=float(outcome_data.get("peak_rss_mb") or 0),
-        vram_mb=outcome_data.get("vram_mb"),
-        objects_merged=int(outcome_data.get("merged") or 0),
-        objects_requested=int(outcome_data.get("requested") or 0),
-        textures_reduced=int(payload.get("textures_reduced") or 0),
+        open_rss_mb=_as_float(outcome_data.get("rss_end_mb")),
+        peak_rss_mb=_as_float(outcome_data.get("peak_rss_mb")),
+        vram_mb=_as_float(outcome_data.get("vram_mb")) or None,
+        objects_merged=_as_int(outcome_data.get("merged")),
+        objects_requested=_as_int(outcome_data.get("requested")),
+        textures_reduced=_as_int(payload.get("textures_reduced")),
         verified=verified,
         problems=tuple(problems),
     )

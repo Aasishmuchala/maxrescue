@@ -68,6 +68,15 @@ class RescueSession:
     proxy_dir: str = ""
     texture_dir: str = "textures_reduced"
 
+    textures: object = None
+    """Pre-read texture facts, when the caller already has them.
+
+    Reading them costs a sweep that OPENS every bitmap on disk to get its real
+    dimensions. Textures are scene-global, so a batch run reads them once and
+    passes them in — otherwise a 10,000-map scene across 50 batches opens half a
+    million files, which on the box is indistinguishable from a hang.
+    """
+
     gate: object = None
     """A callable returning a `VerifyResult`, used to check the one stage that
     is not render-identical.
@@ -99,7 +108,10 @@ class RescueSession:
 
         yield ProgressEvent("plan", "reading the scene", 0.02)
         nodes = list(ctx.query.nodes())
-        textures = list(ctx.query.textures())
+        textures = (
+            list(self.textures) if self.textures is not None
+            else list(ctx.query.textures())
+        )
         engine = ctx.query.engine()
         render_hidden = ctx.query.render_hidden()
 
@@ -234,10 +246,24 @@ class RescueSession:
         replaces a node with a different handle, which invalidates every later
         op aimed at the old one. That is a SKIP, never a halt: the sibling
         project halted whole sessions on it.
+
+        The kind of thing a handle refers to differs by stage. Texture ops
+        target BITMAP LOADERS, not nodes, and checking those with
+        `node_exists` reports every one of them as vanished — which silently
+        skipped the entire texture stage while the log said "target no longer
+        exists", so the feature looked implemented and did nothing.
         """
         try:
             if not op.targets:
                 return None
+
+            if op.stage is Stage.TEXTURES:
+                alive = [
+                    h for h in op.targets
+                    if self.context.query.texture_facts(h) is not None
+                ]
+                return None if alive else "the texture loader no longer exists"
+
             missing = [h for h in op.targets if not self.context.query.node_exists(h)]
             if len(missing) == len(op.targets):
                 return "target no longer exists"

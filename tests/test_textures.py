@@ -75,3 +75,68 @@ def test_a_larger_floor_is_honoured():
 def test_non_square_textures_are_judged_by_their_longest_edge():
     assert texture_reason(texture(width=16384, height=1024), CONFIG) is None
     assert texture_reason(texture(width=4096, height=256), CONFIG) is not None
+
+
+# --------------------------------------------------------------------------
+# the stage actually runs
+# --------------------------------------------------------------------------
+
+
+def test_texture_ops_are_not_skipped_as_missing_nodes():
+    """A texture op targets a BITMAP LOADER, not a node. Checking those handles
+    with `node_exists` reported every one as vanished, so the whole stage was
+    silently skipped while the log said "target no longer exists" — the feature
+    looked implemented and did nothing."""
+    from maxrescue.core.session import RescueSession
+    from maxrescue.core.types import NodeFacts, OpStatus, Stage
+    from tests.fakes import FakeScene, make_context
+
+    scene = FakeScene(rss_mb=9000.0)
+    for index in range(5):
+        scene.textures[index] = TextureFacts(
+            handle=index, path=f"C:/t/{index}.png", width=8192, height=8192
+        )
+    scene.add(
+        NodeFacts(
+            handle=1, name="Hero", class_name="Editable_Poly",
+            super_class="GeomObject", faces=500_000,
+        ),
+        material=1,
+    )
+    ctx = make_context(scene)
+
+    report = None
+    for event in RescueSession(ctx, PlanConfig()).run_chunks():
+        if event.report:
+            report = event.report
+
+    results = [r for r in report.results if r.stage is Stage.TEXTURES]
+    assert results, "no texture ops were planned at all"
+    assert all(r.status is OpStatus.APPLIED for r in results), [
+        (r.status.value, r.message) for r in results
+    ]
+    assert len(ctx.fixes.reduced_textures) == 5
+
+
+def test_a_texture_loader_that_really_vanished_is_skipped_not_halted():
+    from maxrescue.core.plan import PlanConfig as _Config
+    from maxrescue.core.session import RescueSession
+    from maxrescue.core.types import OpStatus, Stage
+    from tests.fakes import FakeScene, make_context
+
+    scene = FakeScene(rss_mb=9000.0)
+    scene.textures[7] = TextureFacts(
+        handle=7, path="C:/t/7.png", width=8192, height=8192
+    )
+    ctx = make_context(scene)
+    original = ctx.query.textures
+    # planned, then gone by the time it runs
+    ctx.query.textures = lambda: tuple(original())
+    scene.textures.pop(7)
+    scene.textures[7] = TextureFacts(handle=7, path="x", width=8192, height=8192)
+
+    report = None
+    for event in RescueSession(ctx, _Config()).run_chunks():
+        if event.report:
+            report = event.report
+    assert not report.halted
