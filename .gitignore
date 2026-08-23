@@ -7,3 +7,4 @@ _scratch/
 .pytest_cache/
 fixtures/*.max
 fixtures/*.MAX
+docs/research/sources/
