@@ -15,6 +15,9 @@ Environment:
     MAXRESCUE_OUT       directory for the JSON report
     MAXRESCUE_CEILING_GB     resident-memory ceiling (default 70)
     MAXRESCUE_CONVERT_BITMAPS  set to 1 to enable the NON-identical bitmap stage
+    MAXRESCUE_TEXTURE_FLOOR_PX
+                          smallest a texture may be reduced to (default 4096;
+                          never honoured below it)
     MAXRESCUE_REFERENCE   a reference EXR from scripts/reference.py. When set,
                           the rescued scene is rendered with the same settings
                           and compared PIXEL FOR PIXEL against it.
@@ -42,6 +45,7 @@ CEILING_GB = float(os.environ.get("MAXRESCUE_CEILING_GB", "70") or 70)
 CONVERT_BITMAPS = os.environ.get("MAXRESCUE_CONVERT_BITMAPS", "").lower() in (
     "1", "true", "yes"
 )
+TEXTURE_FLOOR = int(os.environ.get("MAXRESCUE_TEXTURE_FLOOR_PX", "4096") or 4096)
 REFERENCE = os.environ.get("MAXRESCUE_REFERENCE", "")
 LIGHTCACHE = os.environ.get("MAXRESCUE_LIGHTCACHE", "")
 CAMERA = os.environ.get("MAXRESCUE_CAMERA", "")
@@ -117,6 +121,7 @@ def main() -> str:
     settings = Settings.load()
     settings.convert_bitmaps = CONVERT_BITMAPS or settings.convert_bitmaps
     settings.ram_budget_gb = CEILING_GB
+    settings.texture_floor_px = TEXTURE_FLOOR
     settings.save()
 
     # The X-ray runs first and needs no Max at all — it gives the weights the

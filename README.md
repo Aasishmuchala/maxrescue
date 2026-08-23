@@ -16,7 +16,25 @@ Pipeline: 3ds Max 2026 · V-Ray 7 · Chaos Vantage 3.3.1.
 
 ---
 
-## Commands
+## The app
+
+```powershell
+MaxRescue.exe
+```
+
+Drop a `.max` on it. The diagnosis appears immediately — reading the file needs
+no 3ds Max, so nothing to press and nothing to wait for. Then one button.
+
+The finished screen answers the question that started all this: **what machine
+will this scene run on**, with the measured figure and the recommendation kept
+visibly apart.
+
+Build it with `pwsh scripts\build_app.ps1` — a single `.exe`, no Python, no
+install. 3ds Max is needed only to *rescue* a scene; reading one needs nothing.
+
+![the app](docs/ui_2_surveyed.png)
+
+## Command line
 
 | | Needs Max? | |
 |---|---|---|

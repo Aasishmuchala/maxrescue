@@ -30,6 +30,7 @@ class Settings:
     collapse_stacks: bool = True
     convert_bitmaps: bool = False
     reduce_each_batch: bool = True
+    texture_floor_px: int = 4096
 
     # -- location ---------------------------------------------------------
 
@@ -99,6 +100,7 @@ class Settings:
             delete_hidden=self.delete_hidden,
             collapse_stacks=self.collapse_stacks,
             convert_bitmaps=self.convert_bitmaps,
+            texture_floor_px=self.texture_floor_px,
         )
 
     @property
