@@ -45,6 +45,14 @@ class RescueOutcome:
 
     halted: bool = False
     save_failed: bool = False
+
+    not_attempted: int = 0
+    """Objects the run never reached — because it halted, ran out of headroom,
+    or was cancelled.
+
+    Counted explicitly. Without it a run that stopped after two of fifty batches
+    reports `merged == requested` and reads as complete, because `requested`
+    only ever counted the batches that were attempted."""
     memory_before: MemorySample | None = None
     memory_after: MemorySample | None = None
     log: tuple[str, ...] = ()
@@ -67,6 +75,7 @@ class RescueOutcome:
         return (
             not self.halted
             and not self.save_failed
+            and not self.not_attempted
             and self.merged == self.requested
             and not self.quarantined
         )
@@ -106,26 +115,49 @@ class BatchRunner:
         halted = False
         save_failed = False
 
-        batches = self.governor.plan_all(list(candidates))
-        log.append(self.governor.describe_plan(batches))
+        remaining = list(candidates)
+        preview = self.governor.plan_all(remaining)
+        log.append(self.governor.describe_plan(preview))
+        expected = len(preview)
 
-        yield ProgressEvent("plan", f"{len(batches)} batch(es) planned", 0.01)
+        yield ProgressEvent("plan", f"~{expected} batch(es) planned", 0.01)
 
         ctx.merge.reset_scene()
         ctx.memory.settle()
         memory_before = ctx.memory.sample()
         log.append(f"empty scene baseline: {memory_before.rss_mb:,.0f} MB resident")
 
-        total = max(1, len(batches))
-        for index, batch in enumerate(batches, start=1):
+        total = max(1, expected)
+        index = 0
+        while remaining:
             if self._cancelled:
                 log.append("cancelled by request")
                 break
 
-            base = 0.02 + 0.94 * ((index - 1) / total)
+            resident = int(ctx.memory.sample().rss_mb * 1024 * 1024)
+            if not self.governor.has_headroom(resident):
+                halted = True
+                log.append(
+                    f"! {resident / (1 << 30):.1f} GB already resident against a "
+                    f"{self.governor.ram_budget / (1 << 30):.1f} GB ceiling — no "
+                    f"room for the remaining {len(remaining):,} object(s). "
+                    "Stopping cleanly with what is saved rather than being "
+                    "killed mid-merge."
+                )
+                break
+
+            # Re-plan every time, against BOTH the current calibration and the
+            # memory already held. Planning up front sizes every batch after the
+            # first with a prior that measurement has already disproved.
+            batch, remaining = self.governor.next_batch(remaining, resident)
+            if batch is None:
+                break
+            index += 1
+
+            base = 0.02 + 0.94 * (min(index - 1, total) / total)
             yield ProgressEvent(
                 "merge",
-                f"batch {index} of {len(batches)} — {len(batch.names):,} objects",
+                f"batch {index} — {len(batch.names):,} objects",
                 base,
             )
 
@@ -187,8 +219,15 @@ class BatchRunner:
         ctx.memory.settle()
         memory_after = ctx.memory.sample()
 
+        if remaining:
+            log.append(
+                f"! {len(remaining):,} object(s) were never attempted — they are "
+                "NOT in the output."
+            )
+
         outcome = RescueOutcome(
             batches=tuple(reports),
+            not_attempted=len(remaining),
             output_path=None if save_failed else self.output_path,
             halted=halted,
             save_failed=save_failed,
@@ -312,7 +351,8 @@ class BatchRunner:
         merged = sum(r.merged for r in reports)
         requested = sum(r.requested for r in reports)
         peak = max((r.peak_rss_mb for r in reports), default=0)
+        peak_text = f"{peak:,.0f} MB" if peak else "not measured"
         return (
-            f"merged {merged:,}/{requested:,} objects · peak {peak:,.0f} MB resident "
+            f"merged {merged:,}/{requested:,} objects · peak {peak_text} resident "
             f"during the run · {after.rss_mb:,.0f} MB at the end"
         )

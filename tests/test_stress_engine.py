@@ -265,7 +265,7 @@ def _library(count: int, faces: int = 200_000):
     }
 
 
-def _runner(ctx, budget_gb=0.5, **kw):
+def _runner(ctx, budget_gb=6.0, **kw):
     return BatchRunner(
         context=ctx,
         governor=Governor(ram_budget=int(budget_gb * GB)),
@@ -315,7 +315,7 @@ def test_stress_a_merge_returning_objects_nobody_asked_for():
         return list(library), []
 
     ctx.merge.merge = greedy
-    runner = _runner(ctx, budget_gb=4)
+    runner = _runner(ctx, budget_gb=64)
     candidates = [
         MergeCandidate(name=n, weight=40 * MB, position=i) for i, n in enumerate(library)
     ]
@@ -350,7 +350,7 @@ def test_stress_duplicate_candidate_names_do_not_double_count():
     """Max scenes routinely contain duplicate node names."""
     library = _library(3)
     ctx = make_context(FakeScene(rss_mb=3000.0), library=library)
-    runner = _runner(ctx, budget_gb=4)
+    runner = _runner(ctx, budget_gb=64)
     candidates = [
         MergeCandidate(name="Obj_000", weight=40 * MB, position=i) for i in range(5)
     ]
@@ -360,8 +360,15 @@ def test_stress_duplicate_candidate_names_do_not_double_count():
     assert outcome.merged <= outcome.requested
 
 
-@pytest.mark.parametrize("budget_gb", [0.01, 0.1, 1.0, 64.0])
-def test_stress_every_budget_produces_a_coherent_run(budget_gb):
+@pytest.mark.parametrize("budget_gb", [0.01, 0.1, 1.0, 8.0, 64.0])
+def test_stress_every_budget_accounts_for_every_object(budget_gb):
+    """Including budgets too small to merge anything at all.
+
+    The invariant is accounting, not success: every object must end up merged,
+    short, or explicitly never-attempted. A run that halts after two of fifty
+    batches previously reported `merged == requested` and read as complete,
+    because `requested` only counted the batches it got to.
+    """
     library = _library(20)
     ctx = make_context(FakeScene(rss_mb=3000.0), library=library)
     runner = _runner(ctx, budget_gb=budget_gb)
@@ -370,9 +377,30 @@ def test_stress_every_budget_produces_a_coherent_run(budget_gb):
     ]
     list(runner.run(candidates))
     outcome = runner.outcome
-    assert outcome.requested == 20
-    assert outcome.merged <= 20
-    assert outcome.peak_rss_mb >= 0
+
+    shortfall = sum(b.shortfall for b in outcome.batches)
+    assert outcome.merged + shortfall + outcome.not_attempted == 20, (
+        f"budget {budget_gb} GB lost track of objects: merged={outcome.merged} "
+        f"short={shortfall} unattempted={outcome.not_attempted}"
+    )
+    if outcome.not_attempted:
+        assert not outcome.complete, "unattempted objects must not read as complete"
+
+
+def test_stress_a_budget_below_the_baseline_halts_without_pretending():
+    """Max's own footprint already exceeds the ceiling. Nothing can be merged,
+    and the run must say so rather than reporting an empty success."""
+    library = _library(10)
+    ctx = make_context(FakeScene(rss_mb=3000.0), library=library)
+    runner = _runner(ctx, budget_gb=0.5)
+    candidates = [
+        MergeCandidate(name=n, weight=40 * MB, position=i) for i, n in enumerate(library)
+    ]
+    list(runner.run(candidates))
+    outcome = runner.outcome
+    assert outcome.not_attempted == 10
+    assert not outcome.complete
+    assert any("never attempted" in line or "no room" in line for line in outcome.log)
 
 
 # ---------------------------------------------------------------------------

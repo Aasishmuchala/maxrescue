@@ -91,7 +91,7 @@ def test_the_heaviest_node_is_named_and_reaches_its_own_batch(tmp_path):
     heaviest = report.nodes.heaviest(1)[0]
     assert heaviest.name == "Villa_Hero"
 
-    governor = Governor(ram_budget=1 * GB)
+    governor = Governor(ram_budget=6 * GB)
     batches = governor.plan_all(candidates_from(report.nodes.nodes))
     home = [b for b in batches if "Villa_Hero" in b.names]
     assert len(home) == 1
@@ -127,7 +127,7 @@ def test_a_full_rescue_merges_everything_and_reduces_it(tmp_path):
 
     runner = BatchRunner(
         context=ctx,
-        governor=Governor(ram_budget=1 * GB),
+        governor=Governor(ram_budget=6 * GB),
         source_path=str(source),
         output_path=str(tmp_path / "villa_rescued.max"),
         config=PlanConfig(),
@@ -157,7 +157,7 @@ def test_the_rescue_ends_lighter_than_its_own_peak(tmp_path):
     ctx = make_context(FakeScene(rss_mb=3000.0), library=library)
     runner = BatchRunner(
         context=ctx,
-        governor=Governor(ram_budget=1 * GB),
+        governor=Governor(ram_budget=6 * GB),
         source_path=str(source),
         output_path=str(tmp_path / "out.max"),
         config=PlanConfig(),
@@ -178,7 +178,7 @@ def test_the_calibration_ends_measured_rather_than_assumed(tmp_path):
         for i, c in enumerate(candidates)
     }
     ctx = make_context(FakeScene(rss_mb=3000.0), library=library)
-    governor = Governor(ram_budget=1 * GB)
+    governor = Governor(ram_budget=6 * GB)
     runner = BatchRunner(
         context=ctx, governor=governor, source_path=str(source),
         output_path=str(tmp_path / "out.max"), config=PlanConfig(),
@@ -218,7 +218,7 @@ def test_scatter_objects_survive_a_full_pipeline_run(tmp_path):
     }
     ctx = make_context(FakeScene(rss_mb=3000.0), library=library)
     runner = BatchRunner(
-        context=ctx, governor=Governor(ram_budget=2 * GB), source_path=str(source),
+        context=ctx, governor=Governor(ram_budget=8 * GB), source_path=str(source),
         output_path=str(tmp_path / "out.max"), config=PlanConfig(),
     )
     list(runner.run(candidates))

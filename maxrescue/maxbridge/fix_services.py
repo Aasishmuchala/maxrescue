@@ -442,12 +442,21 @@ class MaxFixServices:
 
     # -- opt-in, gated by an image diff -----------------------------------
 
-    def convert_bitmaps_to_vray(self, tiled: bool = True) -> int:
+    def convert_bitmaps_to_vray(self, tiled: bool = False) -> int:
         """NOT render-identical. Only ever called behind the diff gate.
 
-        VRayBitmap defaults to a sharper filtering kernel than Max's Bitmap, so
-        the image legitimately changes. Blur is reset to 1.0 to remove the one
+        VRayBitmap uses a sharper filtering kernel than Max's Bitmap, so the
+        image legitimately changes. Blur is reset to 1.0 to remove the one
         difference that is a pure artefact.
+
+        **UV/tiling and output state are carried across.** Copying only the
+        filename turns a floor with `U_Tiling = 12` into a single stretched
+        tile — reported as "applied". A texture whose `coords` cannot be carried
+        is left alone rather than converted wrongly.
+
+        `tiled` does nothing yet: generating tiled `.tx` files (the lever that
+        actually reduces render-time texture RAM) is not implemented, and the
+        op title no longer claims it.
         """
         converted = 0
         cls = getattr(rt, "Bitmaptexture", None)
@@ -464,6 +473,26 @@ class MaxFixServices:
                 replacement = vray_cls()
                 replacement.HDRIMapName = path
                 replacement.name = str(texture.name)
+
+                # Mapping channel, tiling, offset, angle. Without this a tiled
+                # material becomes one stretched tile.
+                carried = True
+                for attribute in ("coords", "output", "alphaSource"):
+                    source = getattr(texture, attribute, None)
+                    if source is None:
+                        continue
+                    try:
+                        setattr(replacement, attribute, source)
+                    except Exception:
+                        if attribute == "coords":
+                            carried = False
+                if not carried:
+                    self.notes.append(
+                        f"{texture.name}: UV/tiling state could not be carried "
+                        "over — left as a Max Bitmap rather than converted wrongly"
+                    )
+                    continue
+
                 # A blur other than 1.0 is a Max-specific artefact and would
                 # show up as a difference that is nothing to do with the loader.
                 try:

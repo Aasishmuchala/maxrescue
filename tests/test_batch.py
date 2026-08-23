@@ -88,7 +88,7 @@ def test_the_output_is_saved_after_every_batch():
     library = _library(12)
     ctx = _empty_context(library)
     ctx.merge.library = library
-    runner = _runner(ctx, budget_gb=0.5)
+    runner = _runner(ctx, budget_gb=6.0)
     list(runner.run(_candidates(library)))
     assert len(runner.outcome.batches) > 1
     assert ctx.merge.saved_to == r"C:\jobs\villa\villa_rescued.max"
@@ -128,7 +128,7 @@ def test_a_batch_that_merges_nothing_is_quarantined_and_the_run_continues():
     library = _library(6)
     ctx = _empty_context(library)
     ctx.merge.library = {}  # nothing resolves
-    runner = _runner(ctx, budget_gb=0.2)
+    runner = _runner(ctx, budget_gb=4.5)
     list(runner.run(_candidates(library)))
     outcome = runner.outcome
     assert outcome.quarantined
@@ -155,7 +155,7 @@ def test_a_halting_batch_stops_the_run_and_says_what_was_saved():
     ctx = _empty_context(library)
     ctx.merge.library = library
     ctx.scene.fail_proxy_for = {1000 + i for i in range(8)}
-    runner = _runner(ctx, budget_gb=0.3)
+    runner = _runner(ctx, budget_gb=5.0)
     list(runner.run(_candidates(library)))
     outcome = runner.outcome
     assert outcome.halted
@@ -166,7 +166,7 @@ def test_the_outcome_reports_peak_memory_during_the_run_not_just_the_end():
     """The end figure is the point of the exercise; the peak is what decides
     whether the machine survives it."""
     library = _library(10, faces=500_000)
-    outcome = _run(_empty_context(library), library=library, budget_gb=0.4)
+    outcome = _run(_empty_context(library), library=library, budget_gb=5.5)
     assert outcome.peak_rss_mb > 0
 
 
@@ -180,7 +180,7 @@ def test_the_governor_is_calibrated_from_real_batches():
     library = _library(12)
     ctx = _empty_context(library)
     ctx.merge.library = library
-    runner = _runner(ctx, budget_gb=0.4)
+    runner = _runner(ctx, budget_gb=5.5)
     assert runner.governor.calibration.observed is False
     list(runner.run(_candidates(library)))
     assert runner.governor.calibration.observed is True
@@ -206,7 +206,7 @@ def test_cancelling_stops_between_batches_and_keeps_what_was_done():
     library = _library(12)
     ctx = _empty_context(library)
     ctx.merge.library = library
-    runner = _runner(ctx, budget_gb=0.3)
+    runner = _runner(ctx, budget_gb=5.0)
     events = runner.run(_candidates(library))
     next(events)
     runner.cancel()
@@ -228,7 +228,7 @@ def test_calibration_uses_the_merge_cost_not_the_net_change():
     library = _library(8, faces=400_000)
     ctx = _empty_context(library)
     ctx.merge.library = library
-    runner = _runner(ctx, budget_gb=0.4)
+    runner = _runner(ctx, budget_gb=5.5)
     list(runner.run(_candidates(library)))
     batch = runner.outcome.batches[0]
     assert batch.merge_cost_mb > 0, "merging must cost memory"

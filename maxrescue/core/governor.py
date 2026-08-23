@@ -55,10 +55,26 @@ class MergeCandidate:
 
     name: str
     weight: int
-    """On-disk bytes, from the tier-2 walk."""
+    """This node's OWN on-disk bytes, from the tier-2 walk."""
 
     position: int
     parent_position: int | None = None
+
+    shared_key: int | None = None
+    """The base object this node instances, if any.
+
+    Two purposes, both load-bearing for instance-heavy archviz:
+
+    * instances of one base must merge **together**, or each batch
+      deserialises the shared mesh afresh and the rebuilt scene ends up with N
+      copies of a 400k-face tree — bigger than the original;
+    * the shared mesh must be counted **once** when sizing a batch. Counting it
+      per instance makes 8,000 trees look like 8,000 unique meshes and the
+      governor plans wildly more batches than the scene needs.
+    """
+
+    shared_weight: int = 0
+    """Bytes of the shared base object. Counted once per `shared_key`."""
 
 
 @dataclass(frozen=True)
@@ -128,9 +144,16 @@ class Governor:
     def predicted_ram(self, weight: int) -> int:
         return int(weight * self.calibration.multiplier)
 
-    def weight_budget(self) -> int:
-        """The usable ceiling expressed in on-disk bytes."""
-        return max(1, int(self.usable_budget / self.calibration.multiplier))
+    def weight_budget(self, resident_bytes: int = 0) -> int:
+        """On-disk bytes that will fit in the remaining headroom.
+
+        `resident_bytes` is what the process already holds — Max's own footprint
+        plus every batch merged so far. Sizing against a fixed fraction of the
+        ceiling while the scene accumulates underneath means the ceiling is never
+        actually enforced.
+        """
+        headroom = self.usable_budget - max(0, resident_bytes)
+        return max(1, int(headroom / self.calibration.multiplier))
 
     # -- learning ----------------------------------------------------------
 
@@ -148,17 +171,19 @@ class Governor:
 
     # -- planning ----------------------------------------------------------
 
-    def plan_all(self, candidates: list[MergeCandidate]) -> list[Batch]:
+    def plan_all(
+        self, candidates: list[MergeCandidate], resident_bytes: int = 0
+    ) -> list[Batch]:
         """Group every candidate into batches, families kept intact."""
         if not candidates:
             return []
 
         families = _families(candidates)
-        budget = self.weight_budget()
+        budget = self.weight_budget(resident_bytes)
 
         # Heaviest first: first-fit-decreasing packs tighter and, more
         # usefully here, surfaces the over-budget families immediately.
-        families.sort(key=lambda f: (-sum(c.weight for c in f), f[0].name))
+        families.sort(key=lambda f: (-family_weight(f), f[0].name))
 
         batches: list[Batch] = []
         open_names: list[str] = []
@@ -171,7 +196,7 @@ class Governor:
                 open_names, open_weight = [], 0
 
         for family in families:
-            weight = sum(c.weight for c in family)
+            weight = family_weight(family)
             names = tuple(c.name for c in family)
 
             if weight > budget:
@@ -202,6 +227,34 @@ class Governor:
         flush()
         return batches
 
+    def next_batch(
+        self, remaining: list[MergeCandidate], resident_bytes: int = 0
+    ) -> tuple[Batch | None, list[MergeCandidate]]:
+        """The next batch to merge, sized against the CURRENT calibration.
+
+        Planning everything up front means every batch after the first is sized
+        by a prior that measurement has already disproved. The self-correction
+        only means something if the remaining work is re-planned after each
+        observation.
+        """
+        if not remaining:
+            return None, []
+        batches = self.plan_all(remaining, resident_bytes)
+        if not batches:
+            return None, []
+        first = batches[0]
+        taken = set(first.names)
+        return first, [c for c in remaining if c.name not in taken]
+
+    def has_headroom(self, resident_bytes: int) -> bool:
+        """Whether there is room to merge anything more at all.
+
+        Batches are already sized against the headroom, so this only fires when
+        the process has filled the ceiling — at which point stopping cleanly
+        with a saved output beats being OOM-killed mid-merge.
+        """
+        return resident_bytes < self.usable_budget
+
     # -- reporting ---------------------------------------------------------
 
     def describe_plan(self, batches: list[Batch]) -> str:
@@ -220,12 +273,28 @@ class Governor:
         return "\n".join(lines)
 
 
-def _families(candidates: list[MergeCandidate]) -> list[list[MergeCandidate]]:
-    """Group candidates into connected parent/child components.
+def family_weight(family: list[MergeCandidate]) -> int:
+    """What a family costs, counting each shared base object once.
 
-    Union-find over parent links. Parents outside the candidate set are ignored
-    (merging a subset is legitimate), and cycles — which a damaged file can
-    describe — collapse into one family instead of looping.
+    Summing raw weights would count one instanced tree's mesh once per copy.
+    """
+    total = sum(c.weight for c in family)
+    seen: set[int] = set()
+    for candidate in family:
+        if candidate.shared_key is None or candidate.shared_key in seen:
+            continue
+        seen.add(candidate.shared_key)
+        total += candidate.shared_weight
+    return total
+
+
+def _families(candidates: list[MergeCandidate]) -> list[list[MergeCandidate]]:
+    """Group candidates into connected components.
+
+    Union-find over BOTH parent links and shared base objects. Parents outside
+    the candidate set are ignored (merging a subset is legitimate), and cycles —
+    which a damaged file can describe — collapse into one family instead of
+    looping.
     """
     parent_of: dict[int, int] = {}
 
@@ -248,6 +317,15 @@ def _families(candidates: list[MergeCandidate]) -> list[list[MergeCandidate]]:
     for candidate in candidates:
         if candidate.parent_position in known:
             union(candidate.position, candidate.parent_position)
+
+    # Instances of one base object travel together, or each batch re-imports
+    # the shared mesh and the output grows instead of shrinking.
+    first_of_base: dict[int, int] = {}
+    for candidate in candidates:
+        if candidate.shared_key is None:
+            continue
+        anchor = first_of_base.setdefault(candidate.shared_key, candidate.position)
+        union(candidate.position, anchor)
 
     grouped: dict[int, list[MergeCandidate]] = {}
     for candidate in candidates:
@@ -277,16 +355,45 @@ def candidates_from(nodes) -> list[MergeCandidate]:
     silently covers less than the scene.
     """
     out: list[MergeCandidate] = []
+    seen: dict[str, int] = {}
     for node in nodes:
         name = getattr(node, "name", "")
         if not name:
             continue
+        # `mergeMaxFile` selects by NAME, and Max scenes routinely contain
+        # duplicates. Asking for the same name in two batches merges every node
+        # with that name twice, so four objects appear where two should — and
+        # the merge only reports names that FAILED to arrive, never extras.
+        if name in seen:
+            seen[name] += 1
+            continue
+        seen[name] = 1
+
+        base = getattr(node, "base_object_position", None)
+        own = getattr(node, "bytes", 0)
+        shared = getattr(node, "object_bytes", 0)
         out.append(
             MergeCandidate(
                 name=name,
-                weight=getattr(node, "bytes", 0) + getattr(node, "object_bytes", 0),
+                weight=own if base is not None else own + shared,
                 position=node.position,
                 parent_position=getattr(node, "parent_position", None),
+                shared_key=base,
+                shared_weight=shared if base is not None else 0,
             )
         )
     return out
+
+
+def duplicate_names(nodes) -> dict[str, int]:
+    """Names shared by more than one node, with their counts.
+
+    Surfaced rather than silently collapsed: merging by name cannot separate
+    them, so the caller needs to know coverage is approximate.
+    """
+    counts: dict[str, int] = {}
+    for node in nodes:
+        name = getattr(node, "name", "")
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    return {name: n for name, n in counts.items() if n > 1}

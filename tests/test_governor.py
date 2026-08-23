@@ -304,3 +304,65 @@ def test_unnamed_nodes_are_dropped_because_merge_selects_by_name():
         NodeInfo(position=1, name="Real", bytes=100, object_bytes=200, resolved=True),
     ]
     assert [c.name for c in candidates_from(nodes)] == ["Real"]
+
+
+# --------------------------------------------------------------------------
+# instancing — the archviz case that decides whether this tool helps at all
+# --------------------------------------------------------------------------
+
+
+def test_instances_of_one_base_object_always_merge_together():
+    """Split across batches, each merge re-imports the shared mesh, and the
+    rebuilt scene ends up with N copies of one 400k-face tree — larger than the
+    original it was meant to shrink."""
+    trees = [
+        MergeCandidate(
+            name=f"Tree_{i:03d}", weight=1 * MB, position=i,
+            shared_key=9999, shared_weight=400 * MB,
+        )
+        for i in range(500)
+    ]
+    batches = _governor(budget_gb=1).plan_all(trees)
+    homes = {name: i for i, b in enumerate(batches) for name in b.names}
+    assert len(set(homes.values())) == 1, "the instance set was split"
+
+
+def test_a_shared_base_object_is_counted_once_not_once_per_instance():
+    """Counting it per instance makes 500 trees look like 500 unique meshes and
+    the governor plans wildly more batches than the scene needs."""
+    from maxrescue.core.governor import family_weight
+
+    trees = [
+        MergeCandidate(name=f"T{i}", weight=1 * MB, position=i,
+                       shared_key=7, shared_weight=400 * MB)
+        for i in range(100)
+    ]
+    assert family_weight(trees) == 100 * MB + 400 * MB
+
+
+def test_distinct_base_objects_are_each_counted_once():
+    from maxrescue.core.governor import family_weight
+
+    mixed = [
+        MergeCandidate(name="a", weight=MB, position=0, shared_key=1, shared_weight=10 * MB),
+        MergeCandidate(name="b", weight=MB, position=1, shared_key=1, shared_weight=10 * MB),
+        MergeCandidate(name="c", weight=MB, position=2, shared_key=2, shared_weight=20 * MB),
+    ]
+    assert family_weight(mixed) == 3 * MB + 10 * MB + 20 * MB
+
+
+def test_duplicate_names_yield_one_candidate_each():
+    """Merge selects by name; asking twice merges every node with that name
+    twice, and the merge only reports names that failed to arrive, never
+    extras."""
+    from maxrescue.core.governor import candidates_from, duplicate_names
+    from maxrescue.xray.nodes import NodeInfo
+
+    nodes = [
+        NodeInfo(position=0, name="Box001", bytes=10, object_bytes=100),
+        NodeInfo(position=1, name="Box001", bytes=10, object_bytes=100),
+        NodeInfo(position=2, name="Unique", bytes=10, object_bytes=100),
+    ]
+    names = [c.name for c in candidates_from(nodes)]
+    assert names == ["Box001", "Unique"]
+    assert duplicate_names(nodes) == {"Box001": 2}

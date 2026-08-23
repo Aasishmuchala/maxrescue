@@ -67,8 +67,22 @@ class RescueSession:
 
     proxy_dir: str = ""
 
+    gate: object = None
+    """A callable returning a `VerifyResult`, used to check the one stage that
+    is not render-identical.
+
+    Without it the BITMAP stage is SKIPPED rather than applied. It previously
+    ran unconditionally while the plan advertised "gated by an image diff; the
+    whole stage reverts on failure" — there was no diff and no revert, which is
+    a worse position than having no gate at all, because the claim was on the
+    record."""
+
     def __post_init__(self) -> None:
         self._cancelled = False
+        #: old handle -> new handle, for nodes REPLACED rather than removed.
+        self._replacements: dict[int, int] = {}
+        #: handles this run deliberately deleted.
+        self._removed: set[int] = set()
 
     def cancel(self) -> None:
         self._cancelled = True
@@ -128,6 +142,19 @@ class RescueSession:
 
                 fraction = 0.10 + 0.72 * (index / total)
                 yield ProgressEvent(op.stage.label, op.title, fraction)
+
+                if op.stage is Stage.BITMAP and self.gate is None:
+                    results.append(
+                        OpResult(
+                            op.id,
+                            op.stage,
+                            OpStatus.SKIPPED,
+                            "no render-identity gate available — this stage is "
+                            "not render-identical and will not run unchecked",
+                        )
+                    )
+                    log.append(f"  ~ {op.title} — skipped: no gate available")
+                    continue
 
                 reason = self._still_applicable(op)
                 if reason:
@@ -259,6 +286,7 @@ class RescueSession:
             for handle in op.targets:
                 if self.context.query.node_exists(handle):
                     fixes.delete_node(handle)
+                    self._removed.add(handle)
 
         elif op.stage is Stage.COLLAPSE:
             for handle in op.targets:
@@ -268,8 +296,12 @@ class RescueSession:
             for handle in op.targets:
                 new_handle = fixes.convert_to_proxy(handle, self.proxy_dir)
                 if new_handle:
-                    # Bounding box: anything heavier defeats the purpose, and a
-                    # modifier here would revert it to a regular mesh.
+                    # Conversion REPLACES the node, so the guard must follow the
+                    # binding to the new handle. Without this mapping the old
+                    # handle simply vanishes and the guard skips it as
+                    # "intentionally removed" — leaving the stage most likely to
+                    # lose a material the one stage the guard cannot see.
+                    self._replacements[handle] = new_handle
                     fixes.set_proxy_display(new_handle, 0)
 
         elif op.stage is Stage.VIEWPORT:
@@ -282,7 +314,17 @@ class RescueSession:
                     fixes.set_scatter_display(handle, "points")
 
         elif op.stage is Stage.BITMAP:
-            fixes.convert_bitmaps_to_vray(tiled=True)
+            fixes.convert_bitmaps_to_vray()
+            # The gate runs INSIDE the undo transaction, so a failing diff
+            # raises and the whole conversion is rolled back rather than left
+            # in place with a warning nobody reads.
+            result = self.gate()
+            if not getattr(result, "passed", False):
+                raise RuntimeError(
+                    "bitmap conversion changed the render beyond the allowed "
+                    f"tolerance ({getattr(result, 'summary', 'no detail')}) — "
+                    "the whole stage has been rolled back"
+                )
 
     def _verify(self, op: Op) -> bool:
         query = self.context.query
@@ -308,6 +350,21 @@ class RescueSession:
     # -- guard ------------------------------------------------------------
 
     def _sweep(self, snapshot: tuple[Assignment, ...]) -> GuardReport:
+        """Compare every pinned binding against the scene as it now stands.
+
+        Three cases, and keeping them apart is what makes the guard mean
+        anything:
+
+        * **Replaced** — proxy conversion swapped the node for a new handle. The
+          binding must be checked on the NEW node. Treating the old handle as
+          simply gone would blind the guard to the one stage most likely to drop
+          a material.
+        * **Deliberately removed** — the hidden-object stage deleted it. Not a
+          loss.
+        * **Vanished** — gone, and nothing in this run says it should be. That is
+          a loss, and previously it was silently skipped alongside the
+          intentional deletions.
+        """
         ctx = self.context
         before = {a.node_handle: a.material_handle for a in snapshot}
         now = {a.node_handle: a.material_handle for a in ctx.guard.current()}
@@ -316,18 +373,34 @@ class RescueSession:
         repaired: list[Assignment] = []
         unrepaired: list[Assignment] = []
 
-        for handle, material in before.items():
-            if material is None:
-                continue
-            if handle not in now:
-                continue  # the node was intentionally removed
-            if now[handle] == material:
-                continue
+        def record(handle: int, material: int) -> None:
             lost.append(Assignment(handle, material))
             if ctx.guard.reattach(handle, material):
                 repaired.append(Assignment(handle, material))
             else:
                 unrepaired.append(Assignment(handle, material))
+
+        for handle, material in before.items():
+            if material is None:
+                continue
+
+            replacement = self._replacements.get(handle)
+            if replacement is not None:
+                if now.get(replacement) != material:
+                    record(replacement, material)
+                continue
+
+            if handle in self._removed:
+                continue  # deleted on purpose
+
+            if handle not in now:
+                # Vanished without this run asking for it — a group-select
+                # cascade, or a plugin taking siblings with it.
+                record(handle, material)
+                continue
+
+            if now[handle] != material:
+                record(handle, material)
 
         return GuardReport(
             checked=len(before),

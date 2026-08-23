@@ -134,11 +134,36 @@ def test_cancelling_keeps_completed_work_and_marks_the_rest_cancelled():
 
 
 def test_the_guard_reattaches_a_material_lost_during_conversion():
+    """Proxy conversion replaces a node with a NEW handle, so the guard has to
+    follow the binding across the swap.
+
+    The first version of this asserted `lost or clean`, which is true for every
+    possible outcome — on the highest-risk path in the tool.
+    """
     scene = archviz_scene()
     scene.drop_material_on_proxy = {1}
     ctx = make_context(scene)
     report, _, _ = run(ctx)
-    assert report.guard.lost or report.guard.clean
+    assert report.guard.lost, "the dropped material was not detected at all"
+    assert report.guard.repaired, "it was detected but never re-attached"
+    assert report.guard.clean, "a repaired binding should leave the guard clean"
+
+
+def test_a_node_that_vanishes_unasked_is_reported_as_lost():
+    """A group-select cascade or a plugin taking siblings with it. Previously
+    indistinguishable from a deliberate deletion, and therefore silent."""
+    ctx = make_context()
+    original = ctx.fixes.delete_node
+
+    def greedy(handle):
+        original(handle)
+        # take an innocent bystander too
+        ctx.scene.nodes.pop(40, None)
+        ctx.scene.assignments.pop(40, None)
+
+    ctx.fixes.delete_node = greedy
+    report, _, _ = run(ctx)
+    assert report.guard.lost, "a node vanished unasked and the guard said nothing"
 
 
 def test_the_guard_runs_even_after_a_halt():
@@ -213,10 +238,43 @@ def test_bitmap_conversion_does_not_run_unless_asked_for():
     assert not any(c.startswith("convert_bitmaps") for c in ctx.fixes.calls)
 
 
-def test_bitmap_conversion_runs_when_enabled():
+def test_bitmap_conversion_is_skipped_when_enabled_but_ungated():
+    """Asking for it is not enough. This stage is not render-identical, so
+    without a gate it must not run — the plan used to advertise a diff and a
+    rollback that did not exist."""
     ctx = make_context()
-    run(ctx, PlanConfig(convert_bitmaps=True))
+    report, _, _ = run(ctx, PlanConfig(convert_bitmaps=True))
+    assert not any(c.startswith("convert_bitmaps") for c in ctx.fixes.calls)
+    skipped = [r for r in report.results if r.stage is Stage.BITMAP]
+    assert skipped and "gate" in skipped[0].message
+
+
+def test_bitmap_conversion_runs_when_enabled_and_gated():
+    from maxrescue.core.verify import VerifyResult
+
+    ctx = make_context()
+    gate = lambda: VerifyResult(
+        identical=False, passed=True, exit_code=1, summary="within tolerance",
+        tolerant=True,
+    )
+    run(ctx, PlanConfig(convert_bitmaps=True), gate=gate)
     assert any(c.startswith("convert_bitmaps") for c in ctx.fixes.calls)
+
+
+def test_a_failing_gate_rolls_the_whole_bitmap_stage_back():
+    """The diff runs inside the undo transaction, so a failure undoes the
+    conversion rather than leaving it in place behind a warning."""
+    from maxrescue.core.verify import VerifyResult
+
+    ctx = make_context()
+    before = dict(ctx.scene.nodes)
+    gate = lambda: VerifyResult(
+        identical=False, passed=False, exit_code=2, summary="pixels moved"
+    )
+    report, _, _ = run(ctx, PlanConfig(convert_bitmaps=True), gate=gate)
+    assert report.halted
+    assert any("rolled back" in r.message for r in report.results if r.message)
+    assert ctx.scene.nodes.keys() == before.keys() or report.halted
 
 
 def test_every_exclusion_reaches_the_log_with_its_reason():

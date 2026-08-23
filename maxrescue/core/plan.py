@@ -431,8 +431,12 @@ def plan_bitmaps(config: PlanConfig) -> tuple[list[Op], list[str]]:
         Op(
             id="bitmap.convert",
             stage=Stage.BITMAP,
-            title="convert bitmap loaders to VRayBitmap (+ tiled .tx)",
-            predicted_note="gated by an image diff; the whole stage reverts on failure",
+            title="convert bitmap loaders to VRayBitmap",
+            predicted_note=(
+                "NOT render-identical: VRayBitmap uses a different filtering "
+                "kernel by design. Runs only when a render-identity gate is "
+                "supplied, and rolls back if the diff fails."
+            ),
         )
     ], []
 
