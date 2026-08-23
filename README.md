@@ -134,7 +134,7 @@ python3 -m venv .venv && ./.venv/bin/python -m pip install -e ".[dev]"
 ./.venv/bin/python -m pytest
 ```
 
- tests, a few seconds, on macOS with no 3ds Max anywhere.
+521 tests, a few seconds, on macOS with no 3ds Max anywhere.
 
 `xray/` and `core/` are pure — no `pymxs`, no Qt — and a test enforces it in both
 directions. `maxbridge/` is the only place Max may exist.
