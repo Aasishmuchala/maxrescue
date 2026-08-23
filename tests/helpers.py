@@ -58,3 +58,41 @@ def dll_entry(description: str, filename: str) -> bytes:
     return container(
         0x2038, leaf(0x2039, utf16(description)), leaf(0x2037, utf16(filename))
     )
+
+
+def refs_flat(*indices: int) -> bytes:
+    """A 0x2034 reference list: a flat int32 array where position == slot."""
+    return leaf(0x2034, struct.pack(f"<{len(indices)}i", *indices))
+
+
+def refs_map(pairs: dict[int, int], flags: int = 0x10) -> bytes:
+    """A 0x2035 reference map: [flags, key0, idx0, key1, idx1, ...]."""
+    values = [flags]
+    for key in sorted(pairs):
+        values += [key, pairs[key]]
+    return leaf(0x2035, struct.pack(f"<{len(values)}I", *values))
+
+
+def node_chunk(
+    ident: int,
+    *,
+    name: str | None = None,
+    refs: bytes | None = None,
+    parent: int | None = None,
+    extra: bytes = b"",
+) -> bytes:
+    """An INode object chunk: name (0x0962), parent (0x0960), references."""
+    body = b""
+    if parent is not None:
+        body += leaf(0x0960, struct.pack("<II", parent, 0))
+    if name is not None:
+        body += leaf(0x0962, utf16(name))
+    if refs is not None:
+        body += refs
+    body += extra
+    return container(ident, body)
+
+
+def derived_object(ident: int, refs: bytes) -> bytes:
+    """A DerivedObject (0x2032/0x2033): its reference list IS the modifier stack."""
+    return container(ident, refs)

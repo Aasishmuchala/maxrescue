@@ -34,11 +34,13 @@ bit-identical, on a 128 GB / 32 GB-VRAM box. Max 2026 · V-Ray 7 · Vantage 3.3.
 - [x] **T6** chunk reader — 24 tests (headers, wide escape, nesting, malformed-raises-not-hangs, streaming O(1)). **OLE2 wrapper (`ole.py`) still to do**
 - [x] **T7** `DllDirectory` + `ClassDirectory3` join, ClassID collision fix, **and** the signature scanner (malware vs suspicious separated; streaming with overlap so boundary-straddling matches are found). Missing-plugin *report* lands with T10
 - [x] **T8** shallow scene walk — 18 tests; per-object class+weight from headers alone, histogram, heaviest-N, geometry split, DerivedObject special-casing, degrades on damage instead of raising
-- [ ] **T9** T3 node graph (names `0x0962`, refs `0x2034`/`0x2035`, modifier stacks) — **degrades to T2 on unknowns, never raises**
+- [x] **T9** node graph — 17 tests; names, parent, material, modifier stacks via DerivedObject, per-node object-graph weight, `owner_of()` naming the heaviest object; degrades per-node with a reason, `--strict` raises
 - [x] **T10** `maxrescue xray <file>` → text + JSON report, verdict, plugin list, malware findings, histogram. **HTML rendering deferred** (text+JSON cover the need)
 
 ### ✅ Checkpoint B — X-ray
-- [ ] Pure tests green on macOS with no Max
+- [x] Pure tests green on macOS with no Max (170 tests, <0.2s)
+- [x] All three tiers built; `maxrescue xray` runnable
+- [ ] **Validate against a real .max** (blocked: no fixture)
 - [ ] X-ray verdict consistent with the S3 spike split
 - [ ] Human review
 

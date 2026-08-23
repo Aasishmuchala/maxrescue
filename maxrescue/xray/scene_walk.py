@@ -56,9 +56,20 @@ class SceneObject:
     ident: int
     offset: int
     bytes: int
+    header_size: int
+    """6 or 14 — needed to find this object's interior when tier 3 descends."""
+
     class_name: str
     super_class_name: str
     class_entry: ClassEntry | None
+
+    @property
+    def payload_start(self) -> int:
+        return self.offset + self.header_size
+
+    @property
+    def end(self) -> int:
+        return self.offset + self.bytes
 
     @property
     def is_derived_object(self) -> bool:
@@ -165,6 +176,7 @@ def walk_scene(
                     ident=chunk.ident,
                     offset=chunk.start,
                     bytes=chunk.total_size,
+                    header_size=chunk.header_size,
                     class_name=class_name,
                     super_class_name=super_name,
                     class_entry=entry,

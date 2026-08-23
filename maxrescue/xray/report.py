@@ -19,6 +19,7 @@ from maxrescue.xray.directories import (
     parse_class_directory,
     parse_dll_directory,
 )
+from maxrescue.xray.nodes import NodeGraph, build_node_graph
 from maxrescue.xray.ole import MaxFile, StreamInfo
 from maxrescue.xray.scene_walk import SceneInventory, walk_scene
 from maxrescue.xray.signatures import Finding, Severity, scan_max_file
@@ -60,6 +61,7 @@ class XrayReport:
     streams: tuple[StreamInfo, ...]
     catalog: ClassCatalog
     inventory: SceneInventory
+    nodes: NodeGraph
     findings: tuple[Finding, ...]
     verdict: str
     observations: tuple[str, ...]
@@ -119,6 +121,23 @@ class XrayReport:
                     for o in inv.heaviest(20)
                 ],
             },
+            "nodes": {
+                "total": self.nodes.total_nodes,
+                "resolved": self.nodes.resolved_count,
+                "resolution_rate": round(self.nodes.resolution_rate, 4),
+                "heaviest": [
+                    {
+                        "name": n.name,
+                        "position": n.position,
+                        "object_class": n.object_class,
+                        "base_object_class": n.base_object_class,
+                        "modifiers": list(n.modifiers),
+                        "object_bytes": n.object_bytes,
+                        "parent_position": n.parent_position,
+                    }
+                    for n in self.nodes.heaviest(20)
+                ],
+            },
             "script_findings": [
                 {
                     "signature": f.signature,
@@ -175,6 +194,22 @@ class XrayReport:
                     f"{_mb(row.bytes):>12}  {share:5.1f}%"
                 )
             add("")
+            if self.nodes.total_nodes:
+                add(
+                    f"  Heaviest nodes  ({self.nodes.resolved_count:,} of "
+                    f"{self.nodes.total_nodes:,} named, "
+                    f"{self.nodes.resolution_rate:.0%})"
+                )
+                for node in self.nodes.heaviest(10):
+                    stack = (
+                        " + " + " + ".join(node.modifiers) if node.modifiers else ""
+                    )
+                    label = node.name or f"<unnamed #{node.position}>"
+                    add(
+                        f"    {label:<32} {node.base_object_class}{stack}"
+                        f"  {_mb(node.object_bytes)}"
+                    )
+                add("")
             add("  Heaviest single objects")
             for obj in inv.heaviest(10):
                 add(
@@ -227,6 +262,7 @@ def _mb(value: int) -> str:
 
 def _judge(
     inventory: SceneInventory,
+    nodes: NodeGraph,
     findings: tuple[Finding, ...],
     catalog: ClassCatalog,
 ) -> tuple[str, tuple[str, ...]]:
@@ -265,8 +301,14 @@ def _judge(
         if dominant:
             if verdict == Verdict.HEALTHY:
                 verdict = Verdict.MONSTER_OBJECT
+            owner = nodes.owner_of(heaviest.position)
+            who = (
+                f'"{owner.name}" (#{heaviest.position}, {heaviest.class_name})'
+                if owner is not None and owner.name
+                else f"One object (#{heaviest.position}, {heaviest.class_name})"
+            )
             notes.append(
-                f"One object (#{heaviest.position}, {heaviest.class_name}) is "
+                f"{who} is "
                 f"{_mb(heaviest.bytes)} — {share:.0%} of the scene and "
                 f"{heaviest.bytes // median:,}× the median object. "
                 "A single object this dominant is usually why a file will not open."
@@ -291,6 +333,13 @@ def _judge(
         notes.append(
             f"{len(catalog.malformed_entries())} class-directory entries could not "
             "be decoded; classes for those objects are unresolved."
+        )
+
+    if nodes.total_nodes and nodes.resolution_rate < 0.9:
+        notes.append(
+            f"Only {nodes.resolution_rate:.0%} of nodes could be fully resolved "
+            f"({nodes.resolved_count:,} of {nodes.total_nodes:,}). Names and "
+            "modifier stacks are incomplete; weights are unaffected."
         )
 
     if verdict == Verdict.HEALTHY and not notes:
@@ -318,17 +367,24 @@ def xray(path: str) -> XrayReport:
             else SceneInventory(objects=(), stream_size=0)
         )
 
+        nodes = (
+            build_node_graph(mf.open_reader("Scene"), catalog, inventory)
+            if mf.has("Scene")
+            else NodeGraph(nodes=())
+        )
+
         targets = [s.name for s in mf.streams if s.name.lower() in _SCRIPT_BEARING]
         findings = tuple(scan_max_file(mf, targets))
         streams = mf.streams
 
-    verdict, observations = _judge(inventory, findings, catalog)
+    verdict, observations = _judge(inventory, nodes, findings, catalog)
     return XrayReport(
         path=path,
         file_bytes=os.path.getsize(path),
         streams=streams,
         catalog=catalog,
         inventory=inventory,
+        nodes=nodes,
         findings=findings,
         verdict=verdict,
         observations=observations,
